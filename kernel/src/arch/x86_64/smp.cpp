@@ -107,7 +107,8 @@ CpuState* current_cpu() {
 
 bool map_stack(StackMapping& stack, u64 virtual_base) {
     stack.virtual_base = virtual_base;
-    if (!memory::physical::allocate_contiguous(kStackPages, 1, stack.physical_base)) {
+    if (!memory::physical::allocate_contiguous(kStackPages, 1, stack.physical_base,
+                                               memory::physical::PageOwner::kernel_stack)) {
         return false;
     }
     auto* space = memory::virtual_memory::active_address_space();

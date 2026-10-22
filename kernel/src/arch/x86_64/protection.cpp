@@ -65,7 +65,8 @@ alignas(16) TaskStateSegment tss{};
 bool initialized = false;
 
 bool map_stack(StackMapping& stack) {
-    if (!memory::physical::allocate_contiguous(kStackPages, 1, stack.physical_base)) {
+    if (!memory::physical::allocate_contiguous(kStackPages, 1, stack.physical_base,
+                                               memory::physical::PageOwner::kernel_stack)) {
         return false;
     }
     for (u64 index = 0; index < kStackPages; ++index) {
@@ -85,7 +86,8 @@ void release_stack(StackMapping& stack) {
         memory::virtual_memory::unmap(kernel_space, stack.virtual_base + (index + 1) * kPageSize);
     }
     if (stack.physical_base != 0) {
-        memory::physical::free_contiguous(stack.physical_base, kStackPages);
+        memory::physical::free_contiguous(stack.physical_base, kStackPages,
+                                          memory::physical::PageOwner::kernel_stack);
     }
     stack.physical_base = 0;
     stack.mapped_pages = 0;
@@ -190,7 +192,7 @@ bool supervisor_windows_valid() {
 
     u64 probe_page = 0;
     bool probe_mapped = false;
-    if (!memory::physical::allocate_page(probe_page)) {
+    if (!memory::physical::allocate_page(probe_page, memory::physical::PageOwner::test)) {
         valid = false;
     } else if (!memory::virtual_memory::map(kernel_space, kDynamicProbe, probe_page,
                                             MapFlags::write)) {
@@ -213,7 +215,7 @@ bool supervisor_windows_valid() {
         }
     }
     if (probe_page != 0 && !probe_mapped) {
-        valid = memory::physical::free_page(probe_page) && valid;
+        valid = memory::physical::free_page(probe_page, memory::physical::PageOwner::test) && valid;
     }
     valid = memory::virtual_memory::destroy(process_space) && valid;
     valid = memory::virtual_memory::query(kernel_space, stack_address, inherited) && valid;

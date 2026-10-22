@@ -55,7 +55,7 @@ bool copy_bytes(virtual_memory::AddressSpace& space, u64 user_address, u8* kerne
         const usize page_remaining =
             static_cast<usize>(physical::kPageSize - (current & (physical::kPageSize - 1)));
         const usize chunk = (length - copied) < page_remaining ? (length - copied) : page_remaining;
-        auto* user_bytes = static_cast<u8*>(physical::direct_map(mapping.physical_address));
+        auto* user_bytes = static_cast<u8*>(physical::direct_map_user(mapping.physical_address));
         if (user_bytes == nullptr) {
             return false;
         }
@@ -147,7 +147,7 @@ bool zero_user(virtual_memory::AddressSpace& space, u64 user_destination, usize 
         const usize page_remaining =
             static_cast<usize>(physical::kPageSize - (current & (physical::kPageSize - 1)));
         const usize chunk = (length - cleared) < page_remaining ? (length - cleared) : page_remaining;
-        auto* bytes = static_cast<u8*>(physical::direct_map(mapping.physical_address));
+        auto* bytes = static_cast<u8*>(physical::direct_map_user(mapping.physical_address));
         if (bytes == nullptr) {
             reject();
             return false;
@@ -168,8 +168,9 @@ bool self_test() {
     u64 first_page = 0;
     u64 second_page = 0;
     constexpr u64 kUserBase = 0x40'0000ULL;
-    if (!virtual_memory::create(space, 31) || !physical::allocate_page(first_page) ||
-        !physical::allocate_page(second_page) ||
+    if (!virtual_memory::create(space, 31) ||
+        !physical::allocate_page(first_page, physical::PageOwner::user_data) ||
+        !physical::allocate_page(second_page, physical::PageOwner::user_data) ||
         !virtual_memory::map(space, kUserBase, first_page,
                              virtual_memory::MapFlags::user |
                                  virtual_memory::MapFlags::write) ||
@@ -207,7 +208,8 @@ bool self_test() {
     }
     if (!virtual_memory::unmap(space, kUserBase) ||
         !virtual_memory::unmap(space, kUserBase + physical::kPageSize) ||
-        !physical::free_page(first_page) || !physical::free_page(second_page) ||
+        !physical::free_page(first_page, physical::PageOwner::user_data) ||
+        !physical::free_page(second_page, physical::PageOwner::user_data) ||
         !virtual_memory::destroy(space)) {
         last_failure = 5;
         return false;

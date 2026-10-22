@@ -86,7 +86,8 @@ bool release_stack(Thread& thread) {
             if (!memory::virtual_memory::unmap(
                     *thread.process_space.space,
                     thread.stack_base + index * memory::physical::kPageSize) ||
-                !memory::physical::free_page(thread.stack_pages[index])) {
+                !memory::physical::free_page(thread.stack_pages[index],
+                                             memory::physical::PageOwner::user_stack)) {
                 success = false;
             }
             thread.stack_pages[index] = 0;
@@ -138,7 +139,8 @@ bool create(security::capability::DomainHandle manager,
         bool mapped = true;
         for (usize index = 0; index < kStackPages; ++index) {
             u64 physical_address = 0;
-            if (!memory::physical::allocate_page(physical_address)) {
+            if (!memory::physical::allocate_page(physical_address,
+                                                 memory::physical::PageOwner::user_stack)) {
                 mapped = false;
                 break;
             }
@@ -148,7 +150,8 @@ bool create(security::capability::DomainHandle manager,
                     thread.stack_base + index * memory::physical::kPageSize, physical_address,
                     memory::virtual_memory::MapFlags::user |
                         memory::virtual_memory::MapFlags::write)) {
-                (void)memory::physical::free_page(physical_address);
+                (void)memory::physical::free_page(
+                    physical_address, memory::physical::PageOwner::user_stack);
                 thread.stack_pages[index] = 0;
                 mapped = false;
                 break;
@@ -316,7 +319,7 @@ bool self_test() {
     if (!security::capability::create_domain(manager) ||
         !process::create(manager, "thread-selftest", child) ||
         !process::acquire_address_space(manager, child.control, process_space) ||
-        !memory::physical::allocate_page(code_page) ||
+        !memory::physical::allocate_page(code_page, memory::physical::PageOwner::user_image) ||
         !memory::virtual_memory::map(*process_space.space, kEntry, code_page,
                                      memory::virtual_memory::MapFlags::user |
                                          memory::virtual_memory::MapFlags::execute)) {
@@ -349,7 +352,7 @@ bool self_test() {
     if (!terminate(manager, thread.control, 37) || !destroy(manager, thread.control) ||
         !process::acquire_address_space(manager, child.control, process_space) ||
         !memory::virtual_memory::unmap(*process_space.space, kEntry) ||
-        !memory::physical::free_page(code_page)) {
+        !memory::physical::free_page(code_page, memory::physical::PageOwner::user_image)) {
         last_failure = 4;
         return false;
     }

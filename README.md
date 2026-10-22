@@ -42,6 +42,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Capability-owned user-thread contexts with pinned process spaces and guarded stacks
 - Immutable supervisor stack windows shared into processes without user accessibility or ownership
 - Fail-closed Intel VT-d activation with an empty root table that denies all PCI DMA by default
+- Boot-keyed shadow page ledger with typed ownership, zero-on-transition, and user-map enforcement
 - W^X-compatible ELF segments and non-executable stack
 - Bootable GPT/FAT disk image and UEFI ISO
 - Automated disk and ISO smoke tests
@@ -96,6 +97,8 @@ Artifacts are written to `build/doxxer-kernel.elf`, `dist/doxxer-uefi.img`, and 
 5. Treat reproducible and auditable builds as a security feature.
 
 See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
+[`docs/MEMORY_ISOLATION.md`](docs/MEMORY_ISOLATION.md) for the shadow ownership ledger,
+[`docs/DMA_ISOLATION.md`](docs/DMA_ISOLATION.md) for default-deny VT-d policy,
 [`docs/CPU_PROTECTION.md`](docs/CPU_PROTECTION.md) for descriptor, exception, and stack design,
 [`docs/HEAP.md`](docs/HEAP.md) for dynamic allocation invariants,
 [`docs/INTERRUPTS.md`](docs/INTERRUPTS.md) for ACPI and interrupt-controller design,

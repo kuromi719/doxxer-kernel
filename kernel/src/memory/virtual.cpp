@@ -58,7 +58,7 @@ constexpr bool supervisor_window_index(u64 index) {
 }
 
 PageTable* table_from_physical(u64 physical_address) {
-    return static_cast<PageTable*>(physical::direct_map(physical_address & kAddressMask));
+    return static_cast<PageTable*>(physical::direct_map_page_table(physical_address & kAddressMask));
 }
 
 bool table_empty(const PageTable* table) {
@@ -74,12 +74,12 @@ bool table_empty(const PageTable* table) {
 }
 
 bool allocate_table(u64& physical_address, PageTable*& table) {
-    if (!physical::allocate_page(physical_address)) {
+    if (!physical::allocate_page(physical_address, physical::PageOwner::page_table)) {
         return false;
     }
     table = table_from_physical(physical_address);
     if (table == nullptr) {
-        physical::free_page(physical_address);
+        physical::free_page(physical_address, physical::PageOwner::page_table);
         physical_address = 0;
         return false;
     }
@@ -200,20 +200,20 @@ void prune_empty_path(AddressSpace& space, u64 virtual_address) {
                 if (table_empty(pt)) {
                     const u64 physical_address = pde & kAddressMask;
                     pde = 0;
-                    physical::free_page(physical_address);
+                    physical::free_page(physical_address, physical::PageOwner::page_table);
                 }
             }
             if (table_empty(pd)) {
                 const u64 physical_address = pdpte & kAddressMask;
                 pdpte = 0;
-                physical::free_page(physical_address);
+                physical::free_page(physical_address, physical::PageOwner::page_table);
             }
         }
     }
     if (table_empty(pdpt) && !supervisor_window_index(pml4_index(virtual_address))) {
         const u64 physical_address = pml4e & kAddressMask;
         pml4e = 0;
-        physical::free_page(physical_address);
+        physical::free_page(physical_address, physical::PageOwner::page_table);
     }
 }
 
@@ -234,7 +234,7 @@ bool destroy_table(PageTable* table, u8 level) {
             }
             const u64 child_physical = entry & kAddressMask;
             table->entries[index] = 0;
-            if (!physical::free_page(child_physical)) {
+            if (!physical::free_page(child_physical, physical::PageOwner::page_table)) {
                 success = false;
             }
         }
@@ -261,7 +261,7 @@ bool destroy_user_half(PageTable* root, bool owns_supervisor_windows) {
             success = false;
         }
         root->entries[index] = 0;
-        if (!physical::free_page(entry & kAddressMask)) {
+        if (!physical::free_page(entry & kAddressMask, physical::PageOwner::page_table)) {
             success = false;
         }
     }
@@ -343,7 +343,7 @@ bool create(AddressSpace& space, u16 pcid) {
     }
     PageTable* active_root = table_from_physical(read_cr3_root());
     if (active_root == nullptr) {
-        physical::free_page(root_physical);
+        physical::free_page(root_physical, physical::PageOwner::page_table);
         return false;
     }
     for (u64 index = kEntriesPerTable / 2; index < kEntriesPerTable; ++index) {
@@ -356,7 +356,7 @@ bool create(AddressSpace& space, u16 pcid) {
             !next_table(root->entries[kCpuWindowIndex], false, true, window) ||
             !next_table(root->entries[kTaskWindowIndex], false, true, window)) {
             destroy_user_half(root, true);
-            physical::free_page(root_physical);
+            physical::free_page(root_physical, physical::PageOwner::page_table);
             return false;
         }
     } else {
@@ -382,7 +382,7 @@ bool destroy(AddressSpace& space) {
     }
     const u64 root_physical = space.root_physical();
     bool success = destroy_user_half(root, space.owns_supervisor_windows_);
-    if (!physical::free_page(root_physical)) {
+    if (!physical::free_page(root_physical, physical::PageOwner::page_table)) {
         success = false;
     }
     space.root_physical_ = 0;
@@ -412,6 +412,11 @@ bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlag
         (page_size != PageSize::size_4k && page_size != PageSize::size_2m) ||
         virtual_address % size != 0 || physical_address % size != 0 ||
         (physical_address & ~kAddressMask) != 0) {
+        return false;
+    }
+    if (has_flag(flags, MapFlags::user) &&
+        !physical::user_mapping_allowed(physical_address, size / kPageSize,
+                                        has_flag(flags, MapFlags::execute))) {
         return false;
     }
 
@@ -540,6 +545,12 @@ bool protect(AddressSpace& space, u64 virtual_address, MapFlags flags) {
         if (virtual_address % static_cast<u64>(PageSize::size_2m) != 0) {
             return false;
         }
+        if (user && !physical::user_mapping_allowed(
+                        pde & kAddressMask,
+                        static_cast<u64>(PageSize::size_2m) / kPageSize,
+                        has_flag(flags, MapFlags::execute))) {
+            return false;
+        }
         pde = (pde & kAddressMask) | leaf_flags(flags, true);
     } else {
         PageTable* pt = table_from_physical(pde);
@@ -548,6 +559,10 @@ bool protect(AddressSpace& space, u64 virtual_address, MapFlags flags) {
         }
         u64& pte = pt->entries[pt_index(virtual_address)];
         if ((pte & kPresent) == 0) {
+            return false;
+        }
+        if (user && !physical::user_mapping_allowed(pte & kAddressMask, 1,
+                                                     has_flag(flags, MapFlags::execute))) {
             return false;
         }
         pte = (pte & kAddressMask) | leaf_flags(flags, false);
@@ -570,29 +585,47 @@ bool self_test() {
     AddressSpace space{};
     u64 page = 0;
     u64 large_run = 0;
+    u64 kernel_page = 0;
+    u64 stack_page = 0;
     bool page_allocated = false;
     bool large_allocated = false;
+    bool kernel_page_allocated = false;
+    bool stack_page_allocated = false;
     bool space_created = false;
     const auto cleanup = [&]() {
         if (space_created && space.valid()) {
             destroy(space);
         }
         if (page_allocated) {
-            physical::free_page(page);
+            physical::free_page(page, physical::PageOwner::user_image);
         }
         if (large_allocated) {
-            physical::free_contiguous(large_run, 512);
+            physical::free_contiguous(large_run, 512, physical::PageOwner::user_image);
+        }
+        if (kernel_page_allocated) {
+            physical::free_page(kernel_page, physical::PageOwner::kernel_heap);
+        }
+        if (stack_page_allocated) {
+            physical::free_page(stack_page, physical::PageOwner::user_stack);
         }
     };
 
     space_created = create(space, 17);
-    page_allocated = physical::allocate_page(page);
-    large_allocated = physical::allocate_contiguous(512, 512, large_run);
-    if (!space_created || !page_allocated || !large_allocated || space.pcid() != 17) {
+    page_allocated = physical::allocate_page(page, physical::PageOwner::user_image);
+    large_allocated = physical::allocate_contiguous(512, 512, large_run,
+                                                    physical::PageOwner::user_image);
+    kernel_page_allocated =
+        physical::allocate_page(kernel_page, physical::PageOwner::kernel_heap);
+    stack_page_allocated =
+        physical::allocate_page(stack_page, physical::PageOwner::user_stack);
+    if (!space_created || !page_allocated || !large_allocated || !kernel_page_allocated ||
+        !stack_page_allocated || space.pcid() != 17) {
         last_self_test_failure = !space_created     ? 11
                                  : !page_allocated  ? 12
                                  : !large_allocated ? 13
-                                                    : 14;
+                                 : !kernel_page_allocated ? 14
+                                 : !stack_page_allocated  ? 15
+                                                          : 16;
         cleanup();
         return false;
     }
@@ -603,6 +636,8 @@ bool self_test() {
     if (is_canonical(0x0000'8000'0000'0000ULL) || is_canonical(0xFFFF'0000'0000'0000ULL) ||
         map(space, 0xFFFF'8000'0000'0000ULL, page, MapFlags::none) ||
         map(space, guard_virtual, page, static_cast<MapFlags>(0x80)) ||
+        map(space, guard_virtual, kernel_page, MapFlags::write | MapFlags::user) ||
+        map(space, guard_virtual, stack_page, MapFlags::user | MapFlags::execute) ||
         !map(space, small_virtual, page, MapFlags::write | MapFlags::user) ||
         map(space, small_virtual, page, MapFlags::user) ||
         map(space, guard_virtual, page, MapFlags::write | MapFlags::execute, PageSize::size_4k) ||
@@ -638,7 +673,8 @@ bool self_test() {
     *hardware_alias = alias_probe;
     const u64 observed_probe = *hardware_alias;
     write_cr3(original_cr3);
-    const auto* direct_page = static_cast<const volatile u64*>(physical::direct_map(page));
+    const auto* direct_page = static_cast<const volatile u64*>(
+        physical::direct_map_owned(page, physical::PageOwner::user_image));
     if (observed_probe != alias_probe || direct_page == nullptr || *direct_page != alias_probe) {
         last_self_test_failure = 4;
         cleanup();
@@ -664,12 +700,17 @@ bool self_test() {
         return false;
     }
     space_created = false;
-    if (!physical::free_page(page) || !physical::free_contiguous(large_run, 512)) {
+    if (!physical::free_page(page, physical::PageOwner::user_image) ||
+        !physical::free_contiguous(large_run, 512, physical::PageOwner::user_image) ||
+        !physical::free_page(kernel_page, physical::PageOwner::kernel_heap) ||
+        !physical::free_page(stack_page, physical::PageOwner::user_stack)) {
         last_self_test_failure = 7;
         return false;
     }
     page_allocated = false;
     large_allocated = false;
+    kernel_page_allocated = false;
+    stack_page_allocated = false;
     const physical::Statistics after = physical::statistics();
     if (before.free_pages != after.free_pages || before.allocated_pages != after.allocated_pages) {
         last_self_test_failure = 8;

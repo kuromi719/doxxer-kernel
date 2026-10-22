@@ -345,7 +345,13 @@ extern "C" [[noreturn]] void kernel_main() {
 
     const volatile limine_memmap_response* memory_map = boot::memmap_request.response;
     const volatile limine_hhdm_response* hhdm = boot::hhdm_request.response;
-    if (!memory::physical::initialize(memory_map, hhdm)) {
+    u64 memory_integrity_key = entropy->values[0] ^ 0x5348'4144'4F57'4D45ULL;
+    if (entropy->value_count > 1) {
+        const u64 second = entropy->values[1];
+        memory_integrity_key ^= (second << 17U) | (second >> 47U);
+    }
+    if (memory_integrity_key == 0 ||
+        !memory::physical::initialize(memory_map, hhdm, memory_integrity_key)) {
         panic("PHYSICAL MEMORY MANAGER INITIALIZATION FAILED");
     }
     if (!memory::physical::self_test()) {
@@ -356,8 +362,13 @@ extern "C" [[noreturn]] void kernel_main() {
     log::write_decimal(memory_stats.free_pages);
     log::write(" / METADATA PAGES: ");
     log::write_decimal(memory_stats.metadata_pages);
+    log::write(" / SHADOW BYTES: ");
+    log::write_decimal(memory_stats.shadow_bytes);
+    log::write(" / OWNER REJECTIONS: ");
+    log::write_decimal(memory_stats.ownership_rejections);
     log::write("\n");
     log::success("PMM ONLINE");
+    log::success("SEALED SHADOW PAGE LEDGER ONLINE");
 
     if (!memory::virtual_memory::self_test()) {
         log::write("[ERROR] VMM SELF-TEST STAGE: ");

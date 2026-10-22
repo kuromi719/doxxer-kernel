@@ -88,7 +88,8 @@ void wipe_stack(TaskSlot& task) {
 
 bool map_task_stack(u32 index, TaskSlot& task) {
     task.virtual_base = kTaskArenaBase + static_cast<u64>(index) * kTaskStride;
-    if (!memory::physical::allocate_contiguous(kStackPages, 1, task.physical_base)) {
+    if (!memory::physical::allocate_contiguous(kStackPages, 1, task.physical_base,
+                                               memory::physical::PageOwner::kernel_stack)) {
         return false;
     }
     auto* space = memory::virtual_memory::active_address_space();

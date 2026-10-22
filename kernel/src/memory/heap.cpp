@@ -296,13 +296,13 @@ SlabHeader* create_slab(usize class_index) {
         return nullptr;
     }
     u64 physical_address = 0;
-    if (!physical::allocate_page(physical_address)) {
+    if (!physical::allocate_page(physical_address, physical::PageOwner::kernel_heap)) {
         release_virtual(arena_page, 1 + kGuardPages);
         return nullptr;
     }
     const u64 virtual_address = virtual_from_page(arena_page + 1);
     if (!virtual_memory::map(*address_space, virtual_address, physical_address, MapFlags::write)) {
-        physical::free_page(physical_address);
+        physical::free_page(physical_address, physical::PageOwner::kernel_heap);
         release_virtual(arena_page, 1 + kGuardPages);
         return nullptr;
     }
@@ -398,7 +398,8 @@ bool discard_large_mapping(LargeRecord& record, u32 mapped_pages) {
             continue;
         }
         set_arena_page_mapped(static_cast<u64>(record.arena_page) + index + 1, false);
-        if (!physical::free_page(mapping.physical_address & ~(physical::kPageSize - 1))) {
+        if (!physical::free_page(mapping.physical_address & ~(physical::kPageSize - 1),
+                                 physical::PageOwner::kernel_heap)) {
             success = false;
         }
     }
@@ -436,11 +437,11 @@ void* allocate_large(usize size) {
         u64 physical_address = 0;
         const u64 virtual_address =
             record->virtual_address + static_cast<u64>(mapped_pages) * physical::kPageSize;
-        if (!physical::allocate_page(physical_address) ||
+        if (!physical::allocate_page(physical_address, physical::PageOwner::kernel_heap) ||
             !virtual_memory::map(*address_space, virtual_address, physical_address,
                                  MapFlags::write)) {
             if (physical_address != 0) {
-                physical::free_page(physical_address);
+                physical::free_page(physical_address, physical::PageOwner::kernel_heap);
             }
             if (!discard_large_mapping(*record, mapped_pages)) {
                 note_corruption();

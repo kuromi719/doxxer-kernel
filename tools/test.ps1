@@ -51,6 +51,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] SERIAL ONLINE',
         '[OK] STACK GUARD SEEDED',
         '[OK] PMM ONLINE',
+        '[OK] SEALED SHADOW PAGE LEDGER ONLINE',
         '[OK] VMM ONLINE',
         '[OK] GDT TSS IDT ONLINE',
         '[OK] SUPERVISOR STACK WINDOWS ISOLATED',

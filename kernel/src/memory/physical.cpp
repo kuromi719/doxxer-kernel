@@ -28,9 +28,25 @@ struct Bitmap {
     }
 };
 
+struct ShadowEntry {
+    u64 seal;
+    u32 generation;
+    PageOwner owner;
+    u8 managed;
+    u8 used;
+    u8 reserved;
+};
+
+static_assert(sizeof(ShadowEntry) == 16);
+
 struct State {
     Bitmap used{};
     Bitmap managed{};
+    ShadowEntry* shadow = nullptr;
+    u64 shadow_key = 0;
+    u64 shadow_bytes = 0;
+    u64 integrity_failures = 0;
+    u64 ownership_rejections = 0;
     u64 hhdm_offset = 0;
     u64 page_count = 0;
     u64 discovered_usable_pages = 0;
@@ -62,6 +78,51 @@ constexpr bool power_of_two(u64 value) { return value != 0 && (value & (value - 
 
 u64 bitmap_bytes(u64 pages) { return (pages + 7) / 8; }
 
+u64 mix64(u64 value) {
+    value ^= value >> 30U;
+    value *= 0xBF58'476D'1CE4'E5B9ULL;
+    value ^= value >> 27U;
+    value *= 0x94D0'49BB'1331'11EBULL;
+    return value ^ (value >> 31U);
+}
+
+u64 shadow_seal(u64 page, const ShadowEntry& entry) {
+    const u64 state_bits = static_cast<u64>(entry.generation) |
+                           (static_cast<u64>(entry.owner) << 32U) |
+                           (static_cast<u64>(entry.managed) << 40U) |
+                           (static_cast<u64>(entry.used) << 48U);
+    return mix64(state.shadow_key ^ (page * 0x9E37'79B9'7F4A'7C15ULL) ^ state_bits);
+}
+
+bool shadow_valid(u64 page) {
+    if (state.shadow == nullptr || page >= state.page_count) {
+        return false;
+    }
+    const ShadowEntry& entry = state.shadow[page];
+    return entry.reserved == 0 && entry.generation != 0 &&
+           entry.seal == shadow_seal(page, entry) &&
+           (entry.managed != 0) == state.managed.get(page) &&
+           (entry.used != 0) == state.used.get(page);
+}
+
+void set_page_state(u64 page, bool managed, bool used, PageOwner owner) {
+    if (page >= state.page_count || state.shadow == nullptr) {
+        return;
+    }
+    state.managed.set(page, managed);
+    state.used.set(page, used);
+    ShadowEntry& entry = state.shadow[page];
+    ++entry.generation;
+    if (entry.generation == 0) {
+        ++entry.generation;
+    }
+    entry.owner = owner;
+    entry.managed = managed ? 1 : 0;
+    entry.used = used ? 1 : 0;
+    entry.reserved = 0;
+    entry.seal = shadow_seal(page, entry);
+}
+
 bool range_end(u64 base, u64 length, u64& end) {
     if (length > static_cast<u64>(-1) - base) {
         return false;
@@ -70,11 +131,17 @@ bool range_end(u64 base, u64 length, u64& end) {
     return true;
 }
 
-void set_managed(u64 page, bool value) { state.managed.set(page, value); }
-
-void set_used(u64 page, bool value) { state.used.set(page, value); }
-
-bool is_available(u64 page) { return state.managed.get(page) && !state.used.get(page); }
+bool is_available(u64 page) {
+    if (!state.managed.get(page)) {
+        return false;
+    }
+    if (!shadow_valid(page)) {
+        ++state.integrity_failures;
+        return false;
+    }
+    const ShadowEntry& entry = state.shadow[page];
+    return !state.used.get(page) && entry.owner == PageOwner::free;
+}
 
 void account_available_page(u64 page, bool add) {
     const u64 physical = page * kPageSize;
@@ -98,7 +165,7 @@ void account_available_page(u64 page, bool add) {
     }
 }
 
-void reserve_page(u64 page) {
+void reserve_page(u64 page, PageOwner owner) {
     if (page >= state.page_count) {
         return;
     }
@@ -108,8 +175,7 @@ void reserve_page(u64 page) {
     if (is_available(page)) {
         account_available_page(page, false);
     }
-    set_managed(page, false);
-    set_used(page, true);
+    set_page_state(page, false, true, owner);
 }
 
 void zone_bounds(Zone zone, u64& begin, u64& end) {
@@ -148,7 +214,7 @@ bool scan_range(u64 begin, u64 end, u64 count, u64 alignment, u64& found) {
     return false;
 }
 
-bool allocate_from_zone(Zone zone, u64 count, u64 alignment, u64& first_page) {
+bool allocate_from_zone(Zone zone, u64 count, u64 alignment, PageOwner owner, u64& first_page) {
     u64 begin = 0;
     u64 end = 0;
     zone_bounds(zone, begin, end);
@@ -167,7 +233,7 @@ bool allocate_from_zone(Zone zone, u64 count, u64 alignment, u64& first_page) {
     }
 
     for (u64 index = 0; index < count; ++index) {
-        set_used(first_page + index, true);
+        set_page_state(first_page + index, true, true, owner);
         account_available_page(first_page + index, false);
     }
     state.allocated_pages += count;
@@ -180,13 +246,24 @@ void secure_zero_pages(u64 first_page, u64 count) {
         reinterpret_cast<void*>(static_cast<uptr>(state.hhdm_offset + first_page * kPageSize));
     memset(bytes, 0, static_cast<usize>(count * kPageSize));
 }
+
+bool verify_shadow_ledger() {
+    sync::LockGuard guard(state.lock);
+    for (u64 page = 0; page < state.page_count; ++page) {
+        if (state.shadow[page].generation != 0 && !shadow_valid(page)) {
+            ++state.integrity_failures;
+            return false;
+        }
+    }
+    return true;
+}
 }
 
 bool initialize(const volatile limine_memmap_response* memory_map,
-                const volatile limine_hhdm_response* hhdm) {
+                const volatile limine_hhdm_response* hhdm, u64 integrity_key) {
     if (state.initialized || memory_map == nullptr || hhdm == nullptr ||
         memory_map->entries == nullptr || memory_map->entry_count == 0 ||
-        memory_map->entry_count > kMaximumMemoryMapEntries) {
+        memory_map->entry_count > kMaximumMemoryMapEntries || integrity_key == 0) {
         return false;
     }
 
@@ -226,10 +303,16 @@ bool initialize(const volatile limine_memmap_response* memory_map,
         return false;
     }
     const u64 one_bitmap_bytes = bitmap_bytes(pages);
-    if (one_bitmap_bytes > static_cast<u64>(-1) / 2) {
+    if (one_bitmap_bytes > static_cast<u64>(-1) / 2 ||
+        pages > static_cast<u64>(-1) / sizeof(ShadowEntry)) {
         return false;
     }
-    const u64 metadata_bytes = one_bitmap_bytes * 2;
+    const u64 shadow_offset = align_up(one_bitmap_bytes * 2, alignof(ShadowEntry));
+    const u64 shadow_bytes = pages * sizeof(ShadowEntry);
+    if (shadow_offset > static_cast<u64>(-1) - shadow_bytes) {
+        return false;
+    }
+    const u64 metadata_bytes = shadow_offset + shadow_bytes;
     const u64 metadata_pages = align_up(metadata_bytes, kPageSize) / kPageSize;
 
     u64 metadata_physical = 0;
@@ -256,6 +339,10 @@ bool initialize(const volatile limine_memmap_response* memory_map,
     }
 
     state.hhdm_offset = hhdm->offset;
+    state.shadow_key = mix64(integrity_key ^ hhdm->offset ^ pages);
+    if (state.shadow_key == 0) {
+        return false;
+    }
     state.page_count = pages;
     state.discovered_usable_pages = discovered_pages;
     state.metadata_pages = metadata_pages;
@@ -263,8 +350,10 @@ bool initialize(const volatile limine_memmap_response* memory_map,
         reinterpret_cast<u8*>(static_cast<uptr>(state.hhdm_offset + metadata_physical));
     state.used = Bitmap{metadata_virtual, pages};
     state.managed = Bitmap{metadata_virtual + one_bitmap_bytes, pages};
+    state.shadow = reinterpret_cast<ShadowEntry*>(metadata_virtual + shadow_offset);
+    state.shadow_bytes = shadow_bytes;
+    memset(metadata_virtual, 0, static_cast<usize>(metadata_bytes));
     memset(metadata_virtual, 0xFF, static_cast<usize>(one_bitmap_bytes));
-    memset(metadata_virtual + one_bitmap_bytes, 0, static_cast<usize>(one_bitmap_bytes));
 
     for (u64 index = 0; index < memory_map->entry_count; ++index) {
         const volatile limine_memmap_entry* entry = memory_map->entries[index];
@@ -279,18 +368,17 @@ bool initialize(const volatile limine_memmap_response* memory_map,
         const u64 end_page = align_down(end, kPageSize) / kPageSize;
         for (u64 page = start_page; page < end_page; ++page) {
             if (!state.managed.get(page)) {
-                set_managed(page, true);
-                set_used(page, false);
+                set_page_state(page, true, false, PageOwner::free);
                 ++state.managed_pages;
                 account_available_page(page, true);
             }
         }
     }
 
-    reserve_page(0);
+    reserve_page(0, PageOwner::reserved);
     const u64 metadata_first_page = metadata_physical / kPageSize;
     for (u64 index = 0; index < metadata_pages; ++index) {
-        reserve_page(metadata_first_page + index);
+        reserve_page(metadata_first_page + index, PageOwner::metadata);
     }
 
     state.initialized = true;
@@ -299,13 +387,15 @@ bool initialize(const volatile limine_memmap_response* memory_map,
 
 bool ready() { return state.initialized; }
 
-bool allocate_page(u64& physical_address, Zone zone) {
-    return allocate_contiguous(1, 1, physical_address, zone);
+bool allocate_page(u64& physical_address, PageOwner owner, Zone zone) {
+    return allocate_contiguous(1, 1, physical_address, owner, zone);
 }
 
-bool allocate_contiguous(u64 page_count, u64 alignment_pages, u64& physical_address, Zone zone) {
+bool allocate_contiguous(u64 page_count, u64 alignment_pages, u64& physical_address,
+                         PageOwner owner, Zone zone) {
     if (!state.initialized || page_count == 0 || !power_of_two(alignment_pages) ||
-        page_count > static_cast<u64>(static_cast<usize>(-1)) / kPageSize) {
+        page_count > static_cast<u64>(static_cast<usize>(-1)) / kPageSize ||
+        owner == PageOwner::free || owner == PageOwner::reserved || owner == PageOwner::metadata) {
         return false;
     }
 
@@ -313,10 +403,11 @@ bool allocate_contiguous(u64 page_count, u64 alignment_pages, u64& physical_addr
     u64 first_page = 0;
     bool allocated = false;
     if (zone == Zone::any) {
-        allocated = allocate_from_zone(Zone::normal, page_count, alignment_pages, first_page) ||
-                    allocate_from_zone(Zone::dma32, page_count, alignment_pages, first_page);
+        allocated = allocate_from_zone(Zone::normal, page_count, alignment_pages, owner,
+                                       first_page) ||
+                    allocate_from_zone(Zone::dma32, page_count, alignment_pages, owner, first_page);
     } else {
-        allocated = allocate_from_zone(zone, page_count, alignment_pages, first_page);
+        allocated = allocate_from_zone(zone, page_count, alignment_pages, owner, first_page);
     }
     if (!allocated) {
         return false;
@@ -327,9 +418,11 @@ bool allocate_contiguous(u64 page_count, u64 alignment_pages, u64& physical_addr
     return true;
 }
 
-bool free_page(u64 physical_address) { return free_contiguous(physical_address, 1); }
+bool free_page(u64 physical_address, PageOwner owner) {
+    return free_contiguous(physical_address, 1, owner);
+}
 
-bool free_contiguous(u64 physical_address, u64 page_count) {
+bool free_contiguous(u64 physical_address, u64 page_count, PageOwner owner) {
     if (!state.initialized || page_count == 0 || physical_address % kPageSize != 0) {
         return false;
     }
@@ -341,7 +434,20 @@ bool free_contiguous(u64 physical_address, u64 page_count) {
     sync::LockGuard guard(state.lock);
     for (u64 index = 0; index < page_count; ++index) {
         const u64 page = first_page + index;
-        if (!state.managed.get(page) || !state.used.get(page)) {
+        if (!state.managed.get(page)) {
+            ++state.ownership_rejections;
+            return false;
+        }
+        if (!shadow_valid(page)) {
+            ++state.integrity_failures;
+            return false;
+        }
+        if (!state.used.get(page)) {
+            ++state.ownership_rejections;
+            return false;
+        }
+        if (state.shadow[page].owner != owner) {
+            ++state.ownership_rejections;
             return false;
         }
     }
@@ -349,18 +455,122 @@ bool free_contiguous(u64 physical_address, u64 page_count) {
     secure_zero_pages(first_page, page_count);
     for (u64 index = 0; index < page_count; ++index) {
         const u64 page = first_page + index;
-        set_used(page, false);
+        set_page_state(page, true, false, PageOwner::free);
         account_available_page(page, true);
     }
     state.allocated_pages -= page_count;
     return true;
 }
 
-void* direct_map(u64 physical_address) {
+void* direct_map_owned(u64 physical_address, PageOwner owner) {
     if (!state.initialized || state.hhdm_offset > static_cast<u64>(-1) - physical_address) {
         return nullptr;
     }
+    const u64 page = physical_address / kPageSize;
+    sync::LockGuard guard(state.lock);
+    if (page >= state.page_count || !state.managed.get(page) || !state.used.get(page) ||
+        !shadow_valid(page)) {
+        ++state.integrity_failures;
+        return nullptr;
+    }
+    if (state.shadow[page].owner != owner) {
+        ++state.ownership_rejections;
+        return nullptr;
+    }
     return reinterpret_cast<void*>(static_cast<uptr>(state.hhdm_offset + physical_address));
+}
+
+void* direct_map_user(u64 physical_address) {
+    if (!state.initialized || state.hhdm_offset > static_cast<u64>(-1) - physical_address) {
+        return nullptr;
+    }
+    const u64 page = physical_address / kPageSize;
+    sync::LockGuard guard(state.lock);
+    if (page >= state.page_count || !state.managed.get(page) || !state.used.get(page) ||
+        !shadow_valid(page)) {
+        ++state.integrity_failures;
+        return nullptr;
+    }
+    const PageOwner owner = state.shadow[page].owner;
+    if (owner != PageOwner::user_image && owner != PageOwner::user_stack &&
+        owner != PageOwner::user_data) {
+        ++state.ownership_rejections;
+        return nullptr;
+    }
+    return reinterpret_cast<void*>(static_cast<uptr>(state.hhdm_offset + physical_address));
+}
+
+void* direct_map_page_table(u64 physical_address) {
+    if (!state.initialized || state.hhdm_offset > static_cast<u64>(-1) - physical_address) {
+        return nullptr;
+    }
+    const u64 page = physical_address / kPageSize;
+    sync::LockGuard guard(state.lock);
+    if (page >= state.page_count || !state.managed.get(page)) {
+        return reinterpret_cast<void*>(static_cast<uptr>(state.hhdm_offset + physical_address));
+    }
+    if (!state.used.get(page) || !shadow_valid(page)) {
+        ++state.integrity_failures;
+        return nullptr;
+    }
+    if (state.shadow[page].owner != PageOwner::page_table) {
+        ++state.ownership_rejections;
+        return nullptr;
+    }
+    return reinterpret_cast<void*>(static_cast<uptr>(state.hhdm_offset + physical_address));
+}
+
+void* direct_map_firmware(u64 physical_address) {
+    if (!state.initialized || state.hhdm_offset > static_cast<u64>(-1) - physical_address) {
+        return nullptr;
+    }
+    const u64 page = physical_address / kPageSize;
+    sync::LockGuard guard(state.lock);
+    if (page < state.page_count && state.managed.get(page)) {
+        return nullptr;
+    }
+    return reinterpret_cast<void*>(static_cast<uptr>(state.hhdm_offset + physical_address));
+}
+
+bool owner_of(u64 physical_address, PageOwner& owner) {
+    if (!state.initialized) {
+        return false;
+    }
+    const u64 page = physical_address / kPageSize;
+    sync::LockGuard guard(state.lock);
+    if (page >= state.page_count || !state.managed.get(page) || !state.used.get(page) ||
+        !shadow_valid(page)) {
+        ++state.integrity_failures;
+        return false;
+    }
+    owner = state.shadow[page].owner;
+    return true;
+}
+
+bool user_mapping_allowed(u64 physical_address, u64 page_count, bool executable) {
+    if (!state.initialized || page_count == 0 || physical_address % kPageSize != 0) {
+        return false;
+    }
+    const u64 first_page = physical_address / kPageSize;
+    if (first_page >= state.page_count || page_count > state.page_count - first_page) {
+        return false;
+    }
+    sync::LockGuard guard(state.lock);
+    for (u64 index = 0; index < page_count; ++index) {
+        const u64 page = first_page + index;
+        if (!state.managed.get(page) || !state.used.get(page) || !shadow_valid(page)) {
+            ++state.integrity_failures;
+            return false;
+        }
+        const PageOwner owner = state.shadow[page].owner;
+        const bool user_owner = owner == PageOwner::user_image || owner == PageOwner::user_stack ||
+                                owner == PageOwner::user_data;
+        if (!user_owner || (executable && owner != PageOwner::user_image)) {
+            ++state.ownership_rejections;
+            return false;
+        }
+    }
+    return true;
 }
 
 Statistics statistics() {
@@ -376,6 +586,9 @@ Statistics statistics() {
         .metadata_pages = state.metadata_pages,
         .dma32_free_pages = state.dma32_free_pages,
         .normal_free_pages = state.normal_free_pages,
+        .shadow_bytes = state.shadow_bytes,
+        .integrity_failures = state.integrity_failures,
+        .ownership_rejections = state.ownership_rejections,
     };
 }
 
@@ -394,35 +607,35 @@ bool self_test() {
     bool normal_allocated = false;
     const auto cleanup = [&]() {
         if (single_allocated) {
-            free_page(single);
+            free_page(single, PageOwner::test);
         }
         if (run_allocated) {
-            free_contiguous(run, 3);
+            free_contiguous(run, 3, PageOwner::test);
         }
         if (dma32_allocated) {
-            free_page(dma32);
+            free_page(dma32, PageOwner::test);
         }
         if (normal_allocated) {
-            free_page(normal);
+            free_page(normal, PageOwner::test);
         }
     };
 
-    single_allocated = allocate_page(single);
-    run_allocated = allocate_contiguous(3, 4, run);
+    single_allocated = allocate_page(single, PageOwner::test);
+    run_allocated = allocate_contiguous(3, 4, run, PageOwner::test);
     if (!single_allocated || !run_allocated || run % (4 * kPageSize) != 0 || single == run) {
         cleanup();
         return false;
     }
 
     if (before.dma32_free_pages != 0) {
-        dma32_allocated = allocate_page(dma32, Zone::dma32);
+        dma32_allocated = allocate_page(dma32, PageOwner::test, Zone::dma32);
         if (!dma32_allocated || dma32 >= kDma32Limit) {
             cleanup();
             return false;
         }
     }
     if (before.normal_free_pages != 0) {
-        normal_allocated = allocate_page(normal, Zone::normal);
+        normal_allocated = allocate_page(normal, PageOwner::test, Zone::normal);
         if (!normal_allocated || normal < kDma32Limit) {
             cleanup();
             return false;
@@ -430,7 +643,7 @@ bool self_test() {
     }
 
     u64 invalid_alignment_result = 0;
-    if (allocate_contiguous(1, 3, invalid_alignment_result)) {
+    if (allocate_contiguous(1, 3, invalid_alignment_result, PageOwner::test)) {
         cleanup();
         return false;
     }
@@ -446,8 +659,10 @@ bool self_test() {
         }
         return true;
     };
-    if (!zero_sampled(static_cast<const u8*>(direct_map(single))) ||
-        !zero_sampled(static_cast<const u8*>(direct_map(run)))) {
+    if (!zero_sampled(static_cast<const u8*>(direct_map_owned(single, PageOwner::test))) ||
+        !zero_sampled(static_cast<const u8*>(direct_map_owned(run, PageOwner::test))) ||
+        direct_map_owned(single, PageOwner::kernel_heap) != nullptr ||
+        free_page(single, PageOwner::kernel_heap)) {
         cleanup();
         return false;
     }
@@ -457,10 +672,13 @@ bool self_test() {
     run_allocated = false;
     dma32_allocated = false;
     normal_allocated = false;
-    if (free_page(single)) {
+    if (free_page(single, PageOwner::test)) {
         return false;
     }
     const Statistics after = statistics();
-    return before.free_pages == after.free_pages && before.allocated_pages == after.allocated_pages;
+    return verify_shadow_ledger() && before.free_pages == after.free_pages &&
+           before.allocated_pages == after.allocated_pages &&
+           after.integrity_failures == before.integrity_failures &&
+           after.ownership_rejections == before.ownership_rejections + 3;
 }
 }

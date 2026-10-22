@@ -72,7 +72,8 @@ bool wait_status(const Unit& unit, u32 mask, bool set) {
 }
 
 bool root_is_empty(u64 root_physical) {
-    const auto* root = static_cast<const RootEntry*>(memory::physical::direct_map(root_physical));
+    const auto* root = static_cast<const RootEntry*>(
+        memory::physical::direct_map_owned(root_physical, memory::physical::PageOwner::iommu));
     if (root == nullptr) {
         return false;
     }
@@ -167,7 +168,8 @@ bool flush_root_table(u64 root_physical) {
     u32 edx = 0;
     asm volatile("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : : "memory");
     const u32 line_size = ((ebx >> 8U) & 0xFFU) * 8U;
-    auto* root = static_cast<u8*>(memory::physical::direct_map(root_physical));
+    auto* root = static_cast<u8*>(
+        memory::physical::direct_map_owned(root_physical, memory::physical::PageOwner::iommu));
     if ((edx & (1U << 19U)) == 0 || line_size < 16 || line_size > 256 ||
         (line_size & (line_size - 1U)) != 0 || root == nullptr) {
         return false;
@@ -192,7 +194,8 @@ void release_all() {
             (void)memory::virtual_memory::unmap(*space, unit.register_virtual);
         }
         if (unit.root_physical != 0) {
-            (void)memory::physical::free_page(unit.root_physical);
+            (void)memory::physical::free_page(unit.root_physical,
+                                              memory::physical::PageOwner::iommu);
         }
         unit = {};
     }
@@ -220,7 +223,8 @@ bool initialize_unit(const firmware::acpi::Iommu& description, usize index) {
     if (unit.version == 0 || unit.version == 0xFFFF'FFFFU || unit.capability == static_cast<u64>(-1)) {
         return false;
     }
-    if (!memory::physical::allocate_page(unit.root_physical) ||
+    if (!memory::physical::allocate_page(unit.root_physical,
+                                         memory::physical::PageOwner::iommu) ||
         !root_is_empty(unit.root_physical) || !flush_root_table(unit.root_physical)) {
         return false;
     }

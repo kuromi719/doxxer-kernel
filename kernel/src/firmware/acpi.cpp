@@ -234,7 +234,7 @@ const SdtHeader* table_at(u64 physical_address) {
     if (physical_address == 0) {
         return nullptr;
     }
-    return static_cast<const SdtHeader*>(memory::physical::direct_map(physical_address));
+    return static_cast<const SdtHeader*>(memory::physical::direct_map_firmware(physical_address));
 }
 
 bool table_valid(const SdtHeader* table) {
