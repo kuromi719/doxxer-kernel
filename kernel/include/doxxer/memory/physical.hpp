@@ -46,6 +46,7 @@ struct Statistics {
     u64 mapping_rejections;
     u64 user_mapping_references;
     u64 supervisor_mapping_references;
+    u64 page_table_references;
 };
 
 bool initialize(const volatile limine_memmap_response* memory_map,
@@ -70,6 +71,8 @@ bool retain_user_mapping(u64 physical_address, u64 page_count, bool executable,
 bool release_user_mapping(u64 physical_address, u64 page_count, IsolationDomain domain);
 bool retain_supervisor_mapping(u64 physical_address, u64 page_count);
 bool release_supervisor_mapping(u64 physical_address, u64 page_count);
+bool retain_page_table_reference(u64 physical_address);
+bool release_page_table_reference(u64 physical_address);
 Statistics statistics();
 bool self_test();
 u32 self_test_failure();

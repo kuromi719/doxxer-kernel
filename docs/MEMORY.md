@@ -50,8 +50,9 @@ The boot self-test verifies:
 3. explicit DMA32 and normal-zone boundaries when those zones exist;
 4. zero-filled delivery;
 5. invalid-alignment rejection;
-6. double-free rejection; and
-7. exact free/allocated accounting restoration.
+6. double-free rejection;
+7. page-table leaf-type rejection and free-while-linked rejection; and
+8. exact free/allocated/reference accounting restoration.
 
 A failed invariant takes the serial panic path and halts before the kernel is
 declared ready.
@@ -82,6 +83,9 @@ Current invariants and capabilities:
 - address-space identifiers retain a validated 12-bit PCID for later activation;
 - every managed leaf mapping holds a sealed physical-page reference until unmap, including
   supervisor-only stacks, heap pages, and IOMMU tables;
+- every managed non-leaf page-table edge pins its child table until the parent entry is removed;
+- shared supervisor-window roots take one independent child-table reference per address space;
+- page-table and allocator-metadata pages cannot be installed as ordinary supervisor leaf mappings;
 - active-space edits perform local `invlpg` invalidation; and
 - page-table operations are lock-protected in preparation for SMP.
 
@@ -90,7 +94,9 @@ rejection, translates offset addresses through both page sizes, validates a
 non-present guard page, temporarily activates the new CR3 and verifies a real
 hardware alias, restores the boot address space, changes permissions, unmaps both
 user mappings plus the supervisor probe, destroys the page-table tree, and verifies exact
-physical-page accounting restoration.
+physical-page accounting restoration. It also attempts to free a still-linked intermediate table
+and requires the physical allocator to reject the operation before teardown restores the exact
+page-table-reference count.
 
 The kernel now activates an owned PML4 whose upper half inherits the immutable
 boot mappings and whose lower half contains supervisor-only runtime and
@@ -109,6 +115,6 @@ The virtual layer now also backs a bounded 64 MiB kernel heap arena. Slab and
 large allocations are supervisor-only, writable, and NX; every backing region
 has page guards. See `HEAP.md` for allocator-specific invariants.
 
-The next memory milestone will reconstruct the inherited upper half with
-Doxxer-owned section-granular mappings. PCID activation and SMP TLB shootdowns
-remain disabled until CPU discovery and inter-processor interrupt support exist.
+The next memory milestone will replace HHDM-based page-table editing with bounded, Doxxer-owned
+editing windows and reconstruct the inherited upper half with section-granular mappings. PCID
+activation and SMP TLB shootdowns remain disabled until their invalidation protocol is implemented.

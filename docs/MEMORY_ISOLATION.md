@@ -24,8 +24,12 @@ and managed supervisor pages, unmapping releases them, and the allocator refuses
 with a live reference. This prevents stale page-table entries from observing a page after it has
 been recycled for a different object or domain. Address-space destruction requires an empty user
 half rather than silently dissolving mappings, and managed user pages cannot be inserted through
-the general supervisor mapping path. No public physical-memory API exposes a broad-direct-map
-pointer for user or general kernel-owned pages.
+the general supervisor mapping path. Non-leaf page-table edges use a separate global reference
+class: publishing a parent entry pins the managed child table, removing the entry releases it, and
+every copied supervisor-window root contributes its own reference. Page-table and metadata pages
+are rejected by the ordinary supervisor leaf-mapping path, keeping structural and leaf references
+type-separated. No public physical-memory API exposes a broad-direct-map pointer for user or
+general kernel-owned pages.
 
 Pages are zeroed both before allocation is returned and before release. The shadow generation is
 advanced on every state transition so stale ownership observations cannot silently match a later
@@ -37,6 +41,7 @@ claim that software can make RAM unreadable to a CPU already executing fully com
 code. The runtime loader, user-copy layer, and privilege probes now access user-owned RAM through
 short-lived per-CPU supervisor-only NX windows. The current prototype still trusts its
 firmware-created bootstrap page tables and uses their broad direct map for allocator bootstrap and
-page-table editing. Later milestones should replace those mappings with Doxxer-owned bootstrap
-tables and dedicated editing windows, add guard pages to more object classes, and enable hardware
-RAM encryption and measured boot on platforms that provide them.
+page-table editing. See `PAGE_TABLE_LIFETIMES.md` for the current graph invariant. Later milestones
+should replace those mappings with Doxxer-owned bootstrap tables and dedicated editing windows, add
+guard pages to more object classes, and enable hardware RAM encryption and measured boot on
+platforms that provide them.

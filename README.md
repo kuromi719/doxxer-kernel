@@ -46,6 +46,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Boot-keyed shadow page ledger with typed ownership, zero-on-transition, and user-map enforcement
 - Non-reusable address-space memory domains blocking cross-process RAM mapping and direct access
 - Sealed user and supervisor mapping references preventing free/reuse behind live page-table aliases
+- Reference-counted page-table graph links preventing linked paging structures from being recycled
 - No public broad-HHDM accessor for user or general kernel-owned pages
 - Mandatory per-CPU WP, NX, SMEP, SMAP, UMIP, timestamp restriction, and advertised speculation controls
 - Runtime verification of RX/R/RW kernel image mappings on the active page tables
@@ -106,6 +107,7 @@ See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
 [`docs/MEMORY_ISOLATION.md`](docs/MEMORY_ISOLATION.md) for the shadow ownership ledger,
 [`docs/MEMORY_DOMAINS.md`](docs/MEMORY_DOMAINS.md) for cross-address-space RAM isolation,
 [`docs/TEMPORARY_MAPPINGS.md`](docs/TEMPORARY_MAPPINGS.md) for ephemeral user-page access,
+[`docs/PAGE_TABLE_LIFETIMES.md`](docs/PAGE_TABLE_LIFETIMES.md) for paging-structure ownership,
 [`docs/DMA_ISOLATION.md`](docs/DMA_ISOLATION.md) for default-deny VT-d policy,
 [`docs/CPU_HARDENING.md`](docs/CPU_HARDENING.md) for mandatory per-processor controls,
 [`docs/CPU_PROTECTION.md`](docs/CPU_PROTECTION.md) for descriptor, exception, and stack design,

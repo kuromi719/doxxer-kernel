@@ -138,7 +138,25 @@ bool next_table(u64& entry, bool user, bool create_missing, PageTable*& table) {
     if (!allocate_table(physical_address, table)) {
         return false;
     }
+    if (!physical::retain_page_table_reference(physical_address)) {
+        physical::free_page(physical_address, physical::PageOwner::page_table);
+        physical_address = 0;
+        table = nullptr;
+        return false;
+    }
     entry = physical_address | kPresent | kWritable | (user ? kUser : 0);
+    return true;
+}
+
+bool copy_shared_table_entry(u64& destination, u64 source) {
+    if ((source & kPresent) == 0 || (source & kHuge) != 0) {
+        return false;
+    }
+    const u64 physical_address = source & kAddressMask;
+    if (!physical::retain_page_table_reference(physical_address)) {
+        return false;
+    }
+    destination = source;
     return true;
 }
 
@@ -233,20 +251,28 @@ void prune_empty_path(AddressSpace& space, u64 virtual_address) {
                 if (table_empty(pt)) {
                     const u64 physical_address = pde & kAddressMask;
                     pde = 0;
-                    physical::free_page(physical_address, physical::PageOwner::page_table);
+                    if (physical::release_page_table_reference(physical_address)) {
+                        physical::free_page(physical_address,
+                                            physical::PageOwner::page_table);
+                    }
                 }
             }
             if (table_empty(pd)) {
                 const u64 physical_address = pdpte & kAddressMask;
                 pdpte = 0;
-                physical::free_page(physical_address, physical::PageOwner::page_table);
+                if (physical::release_page_table_reference(physical_address)) {
+                    physical::free_page(physical_address,
+                                        physical::PageOwner::page_table);
+                }
             }
         }
     }
     if (table_empty(pdpt) && !supervisor_window_index(pml4_index(virtual_address))) {
         const u64 physical_address = pml4e & kAddressMask;
         pml4e = 0;
-        physical::free_page(physical_address, physical::PageOwner::page_table);
+        if (physical::release_page_table_reference(physical_address)) {
+            physical::free_page(physical_address, physical::PageOwner::page_table);
+        }
     }
 }
 
@@ -267,7 +293,8 @@ bool destroy_table(PageTable* table, u8 level) {
             }
             const u64 child_physical = entry & kAddressMask;
             table->entries[index] = 0;
-            if (!physical::free_page(child_physical, physical::PageOwner::page_table)) {
+            if (!physical::release_page_table_reference(child_physical) ||
+                !physical::free_page(child_physical, physical::PageOwner::page_table)) {
                 success = false;
             }
         }
@@ -325,7 +352,12 @@ bool destroy_user_half(PageTable* root, bool owns_supervisor_windows) {
     bool success = true;
     for (u64 index = 0; index < kEntriesPerTable / 2; ++index) {
         if (!owns_supervisor_windows && supervisor_window_index(index)) {
+            const u64 entry = root->entries[index];
             root->entries[index] = 0;
+            if ((entry & kPresent) != 0 && (entry & kHuge) == 0 &&
+                !physical::release_page_table_reference(entry & kAddressMask)) {
+                success = false;
+            }
             continue;
         }
         const u64 entry = root->entries[index];
@@ -337,7 +369,9 @@ bool destroy_user_half(PageTable* root, bool owns_supervisor_windows) {
             success = false;
         }
         root->entries[index] = 0;
-        if (!physical::free_page(entry & kAddressMask, physical::PageOwner::page_table)) {
+        const u64 child_physical = entry & kAddressMask;
+        if (!physical::release_page_table_reference(child_physical) ||
+            !physical::free_page(child_physical, physical::PageOwner::page_table)) {
             success = false;
         }
     }
@@ -442,10 +476,18 @@ bool create(AddressSpace& space, u16 pcid) {
             return false;
         }
     } else {
-        root->entries[kProtectionWindowIndex] = active_root->entries[kProtectionWindowIndex];
-        root->entries[kCpuWindowIndex] = active_root->entries[kCpuWindowIndex];
-        root->entries[kTaskWindowIndex] = active_root->entries[kTaskWindowIndex];
-        root->entries[kTemporaryWindowIndex] = active_root->entries[kTemporaryWindowIndex];
+        if (!copy_shared_table_entry(root->entries[kProtectionWindowIndex],
+                                     active_root->entries[kProtectionWindowIndex]) ||
+            !copy_shared_table_entry(root->entries[kCpuWindowIndex],
+                                     active_root->entries[kCpuWindowIndex]) ||
+            !copy_shared_table_entry(root->entries[kTaskWindowIndex],
+                                     active_root->entries[kTaskWindowIndex]) ||
+            !copy_shared_table_entry(root->entries[kTemporaryWindowIndex],
+                                     active_root->entries[kTemporaryWindowIndex])) {
+            destroy_user_half(root, false);
+            physical::free_page(root_physical, physical::PageOwner::page_table);
+            return false;
+        }
     }
     space.root_physical_ = root_physical;
     space.pcid_ = pcid;
@@ -962,6 +1004,18 @@ bool self_test() {
         return false;
     }
 
+    PageTable* test_root = table_from_physical(space.root_physical());
+    const u64 linked_pdpt_physical = test_root == nullptr
+                                         ? 0
+                                         : test_root->entries[pml4_index(small_virtual)] &
+                                               kAddressMask;
+    if (linked_pdpt_physical == 0 ||
+        physical::free_page(linked_pdpt_physical, physical::PageOwner::page_table)) {
+        last_self_test_failure = 17;
+        cleanup();
+        return false;
+    }
+
     Mapping small_mapping{};
     Mapping large_mapping{};
     Mapping guard_mapping{};
@@ -1036,8 +1090,9 @@ bool self_test() {
     const physical::Statistics after = physical::statistics();
     if (before.free_pages != after.free_pages || before.allocated_pages != after.allocated_pages ||
         before.user_mapping_references != after.user_mapping_references ||
-        after.mapping_rejections != before.mapping_rejections + 3 ||
-        before.supervisor_mapping_references != after.supervisor_mapping_references) {
+        after.mapping_rejections != before.mapping_rejections + 4 ||
+        before.supervisor_mapping_references != after.supervisor_mapping_references ||
+        before.page_table_references != after.page_table_references) {
         last_self_test_failure = 8;
         return false;
     }

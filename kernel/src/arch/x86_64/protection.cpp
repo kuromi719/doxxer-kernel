@@ -349,11 +349,13 @@ bool initialize() {
 }
 
 bool self_test() {
+    const memory::physical::Statistics memory_stats = memory::physical::statistics();
     if (!initialized || !stack_layout_valid(kernel_stack) ||
         !stack_layout_valid(exception_stack) || !stack_layout_valid(emergency_stack) ||
         !descriptor_state_valid() || !hardening::verify_current_processor() ||
         !kernel_image_permissions_valid() || !smap_enforcement_valid() ||
-        !smep_enforcement_valid() || !memory::virtual_memory::temporary_windows_idle()) {
+        !smep_enforcement_valid() || !memory::virtual_memory::temporary_windows_idle() ||
+        memory_stats.page_table_references == 0) {
         return false;
     }
     if (!supervisor_windows_valid()) {

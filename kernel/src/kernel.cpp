@@ -438,6 +438,10 @@ extern "C" [[noreturn]] void kernel_main() {
     log::write_decimal(protected_memory_stats.supervisor_mapping_references);
     log::write(" ACTIVE\n");
     log::success("SUPERVISOR MAPPING LIFETIMES PINNED");
+    log::write("[INFO] PAGE-TABLE LINKS: ");
+    log::write_decimal(protected_memory_stats.page_table_references);
+    log::write(" PINNED\n");
+    log::success("PAGE-TABLE GRAPH LIFETIMES PINNED");
     log::success("SUPERVISOR STACK WINDOWS ISOLATED");
     log::success("EXCEPTION AND GUARD SELF-TEST PASSED");
     arch::x86_64::protection::enter_kernel_stack(protected_kernel_main);

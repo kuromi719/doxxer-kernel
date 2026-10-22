@@ -54,6 +54,7 @@ struct State {
     u64 mapping_rejections = 0;
     u64 user_mapping_references = 0;
     u64 supervisor_mapping_references = 0;
+    u64 page_table_references = 0;
     u64 hhdm_offset = 0;
     u64 page_count = 0;
     u64 discovered_usable_pages = 0;
@@ -663,7 +664,9 @@ bool retain_supervisor_mapping(u64 physical_address, u64 page_count) {
             ++state.integrity_failures;
             return false;
         }
-        if (user_owner(state.shadow[page].owner)) {
+        if (user_owner(state.shadow[page].owner) ||
+            state.shadow[page].owner == PageOwner::page_table ||
+            state.shadow[page].owner == PageOwner::metadata) {
             __atomic_add_fetch(&state.mapping_rejections, 1ULL, __ATOMIC_RELAXED);
             return false;
         }
@@ -710,6 +713,8 @@ bool release_supervisor_mapping(u64 physical_address, u64 page_count) {
             return false;
         }
         if (user_owner(state.shadow[page].owner) ||
+            state.shadow[page].owner == PageOwner::page_table ||
+            state.shadow[page].owner == PageOwner::metadata ||
             state.shadow[page].mapping_references == 0) {
             __atomic_add_fetch(&state.mapping_rejections, 1ULL, __ATOMIC_RELAXED);
             return false;
@@ -730,6 +735,63 @@ bool release_supervisor_mapping(u64 physical_address, u64 page_count) {
         entry.seal = shadow_seal(page, entry);
     }
     state.supervisor_mapping_references -= managed_pages;
+    return true;
+}
+
+bool retain_page_table_reference(u64 physical_address) {
+    if (!state.initialized || physical_address % kPageSize != 0) {
+        return false;
+    }
+    const u64 page = physical_address / kPageSize;
+    sync::LockGuard guard(state.lock);
+    if (page >= state.page_count || !state.managed.get(page) || !state.used.get(page) ||
+        !shadow_valid(page)) {
+        ++state.integrity_failures;
+        return false;
+    }
+    ShadowEntry& entry = state.shadow[page];
+    if (entry.owner != PageOwner::page_table || entry.domain != kKernelDomain) {
+        ++state.ownership_rejections;
+        return false;
+    }
+    if (entry.mapping_references == 0xFFFF'FFFFU ||
+        state.page_table_references == static_cast<u64>(-1)) {
+        __atomic_add_fetch(&state.mapping_rejections, 1ULL, __ATOMIC_RELAXED);
+        return false;
+    }
+    ++entry.mapping_references;
+    entry.seal = shadow_seal(page, entry);
+    ++state.page_table_references;
+    return true;
+}
+
+bool release_page_table_reference(u64 physical_address) {
+    if (!state.initialized || physical_address % kPageSize != 0) {
+        return false;
+    }
+    const u64 page = physical_address / kPageSize;
+    sync::LockGuard guard(state.lock);
+    if (page >= state.page_count || !state.managed.get(page) || !state.used.get(page) ||
+        !shadow_valid(page)) {
+        ++state.integrity_failures;
+        return false;
+    }
+    ShadowEntry& entry = state.shadow[page];
+    if (entry.owner != PageOwner::page_table || entry.domain != kKernelDomain) {
+        ++state.ownership_rejections;
+        return false;
+    }
+    if (entry.mapping_references == 0) {
+        __atomic_add_fetch(&state.mapping_rejections, 1ULL, __ATOMIC_RELAXED);
+        return false;
+    }
+    if (state.page_table_references == 0) {
+        ++state.integrity_failures;
+        return false;
+    }
+    --entry.mapping_references;
+    entry.seal = shadow_seal(page, entry);
+    --state.page_table_references;
     return true;
 }
 
@@ -827,6 +889,7 @@ Statistics statistics() {
             __atomic_load_n(&state.mapping_rejections, __ATOMIC_RELAXED),
         .user_mapping_references = state.user_mapping_references,
         .supervisor_mapping_references = state.supervisor_mapping_references,
+        .page_table_references = state.page_table_references,
     };
 }
 
@@ -842,12 +905,15 @@ bool self_test() {
     u64 dma32 = 0;
     u64 normal = 0;
     u64 domain_page = 0;
+    u64 page_table = 0;
     bool single_allocated = false;
     bool run_allocated = false;
     bool dma32_allocated = false;
     bool normal_allocated = false;
     bool domain_page_allocated = false;
     bool domain_mapping_retained = false;
+    bool page_table_allocated = false;
+    bool page_table_reference_retained = false;
     const auto cleanup = [&]() {
         if (single_allocated) {
             free_page(single, PageOwner::test);
@@ -866,6 +932,12 @@ bool self_test() {
                 release_user_mapping(domain_page, 1, 7);
             }
             free_page(domain_page, PageOwner::user_data, 7);
+        }
+        if (page_table_allocated) {
+            if (page_table_reference_retained) {
+                release_page_table_reference(page_table);
+            }
+            free_page(page_table, PageOwner::page_table);
         }
     };
 
@@ -951,6 +1023,24 @@ bool self_test() {
         return false;
     }
 
+    page_table_allocated = allocate_page(page_table, PageOwner::page_table);
+    page_table_reference_retained =
+        page_table_allocated && retain_page_table_reference(page_table);
+    if (!page_table_reference_retained || retain_supervisor_mapping(page_table, 1) ||
+        free_page(page_table, PageOwner::page_table) ||
+        !release_page_table_reference(page_table)) {
+        last_self_test_failure = 20;
+        cleanup();
+        return false;
+    }
+    page_table_reference_retained = false;
+    if (!free_page(page_table, PageOwner::page_table)) {
+        last_self_test_failure = 21;
+        cleanup();
+        return false;
+    }
+    page_table_allocated = false;
+
     cleanup();
     single_allocated = false;
     run_allocated = false;
@@ -974,13 +1064,15 @@ bool self_test() {
         last_self_test_failure = 14;
     } else if (after.domain_rejections != before.domain_rejections + 4) {
         last_self_test_failure = 15;
-    } else if (after.mapping_rejections != before.mapping_rejections + 3) {
+    } else if (after.mapping_rejections != before.mapping_rejections + 5) {
         last_self_test_failure = 16;
     } else if (after.user_mapping_references != before.user_mapping_references) {
         last_self_test_failure = 17;
     } else if (after.supervisor_mapping_references !=
                before.supervisor_mapping_references) {
         last_self_test_failure = 18;
+    } else if (after.page_table_references != before.page_table_references) {
+        last_self_test_failure = 19;
     }
     return last_self_test_failure == 0;
 }
