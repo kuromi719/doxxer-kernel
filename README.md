@@ -13,12 +13,14 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Entropy-seeded stack protector
 - Zone-aware physical page allocator with secure page wiping
 - Contiguous and aligned page allocation with boot-time invariants
+- Four-level x86_64 virtual memory manager with NX-by-default W^X mappings
+- Isolated address spaces, guard pages, PCID metadata, and 2 MiB page support
 - W^X-compatible ELF segments and non-executable stack
 - Bootable GPT/FAT disk image and UEFI ISO
 - Automated disk and ISO smoke tests
 - High-memory QEMU test covering the allocator's normal-memory zone
 
-Virtual memory management, interrupts, user mode, networking, drivers, Secure Boot, and physical-hardware support are intentionally deferred.
+Interrupts, user mode, networking, drivers, Secure Boot, and physical-hardware support are intentionally deferred.
 
 ## Prerequisites
 

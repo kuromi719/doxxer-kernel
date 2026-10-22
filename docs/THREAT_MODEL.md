@@ -26,6 +26,8 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 - Memory-map validation before allocator startup; reserved and non-usable regions are never admitted to the allocator.
 - Separate DMA32 and normal allocation zones, aligned contiguous allocation, double-free rejection, and lock-protected allocator metadata.
 - Physical pages are wiped both when allocated and when returned, limiting cross-subsystem data remnants.
+- New address spaces enforce NX by default and reject writable-executable mappings; unmapped guard pages remain non-present.
+- Page-table operations reject non-canonical addresses, misalignment, duplicate mappings, and invalid huge-page operations.
 - Serial panic diagnostics followed by an interrupt-disabled halt.
 
 ## Out of scope for milestone 1
@@ -38,4 +40,4 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 
 ## Planned direction
 
-Future milestones should add page-based W^X enforcement, exception handling, a virtual memory manager, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Each milestone must update this document before expanding the trusted computing base.
+Future milestones should activate Doxxer-owned kernel page tables, add exception handling, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Each milestone must update this document before expanding the trusted computing base.

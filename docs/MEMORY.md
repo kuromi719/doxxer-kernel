@@ -15,6 +15,10 @@ Every input range is overflow-checked and rounded inward to complete 4 KiB pages
 Only `LIMINE_MEMMAP_USABLE` pages are admitted; bootloader-reclaimable and ACPI
 memory stay reserved until an explicit later transition.
 
+The HHDM translation helper remains available for valid non-managed physical
+objects such as boot page tables and MMIO. Being direct-mapped does not make a
+page allocator-owned; allocation and release still require managed-bitmap state.
+
 Two independent bitmaps are stored inside a reserved usable-memory range:
 
 - **managed:** the page belongs to an allocator-controlled usable range;
@@ -52,18 +56,38 @@ The boot self-test verifies:
 A failed invariant takes the serial panic path and halts before the kernel is
 declared ready.
 
-## Planned virtual memory layer
+## Virtual memory manager
 
-The next memory milestone will add an x86_64 page-table owner with:
+The x86_64 virtual memory manager owns complete four-level page-table trees for
+future processes and protected kernel domains. Virtual mappings use the physical
+manager as a mechanism, while higher layers decide ownership and capability
+policy.
 
-- NX-by-default mappings and explicit read/write/execute permissions;
-- canonical-address and overflow validation;
-- 4 KiB pages with optional 2 MiB promotion for suitable immutable ranges;
-- recursive or direct-map page-table editing without ambient raw pointers;
-- address-space identifiers prepared for PCID support;
-- TLB invalidation APIs that can later grow into SMP shootdowns;
-- guard pages around kernel stacks and sensitive allocator regions; and
-- a small kernel heap layered on virtual mappings rather than physical addresses.
+Current invariants and capabilities:
 
-Virtual mappings will use the physical manager as a mechanism, while higher
-layers decide ownership and capability policy.
+- mappings are non-executable by default;
+- writable-executable mappings are rejected rather than silently weakened;
+- canonical addresses, physical-address width, and alignment are validated;
+- both 4 KiB and aligned 2 MiB mappings are supported;
+- supervisor/user, global, execute, write, and cache policy are explicit;
+- missing pages naturally act as guard pages;
+- duplicate maps and repeated unmaps fail deterministically;
+- empty intermediate tables are pruned and returned to the physical allocator;
+- complete inactive address spaces can be destroyed without freeing leaf data;
+- new spaces inherit a shared, immutable kernel half while owning only their lower-half tables;
+- public mapping operations cannot mutate the shared kernel half;
+- address-space identifiers retain a validated 12-bit PCID for later activation;
+- active-space edits perform local `invlpg` invalidation; and
+- page-table operations are lock-protected in preparation for SMP.
+
+The boot self-test builds an isolated address space, checks W^X and unknown-flag
+rejection, translates offset addresses through both page sizes, validates a
+non-present guard page, temporarily activates the new CR3 and verifies a real
+hardware alias, restores the boot address space, changes permissions, unmaps both
+mappings, destroys the page-table tree, and verifies exact physical-page
+accounting restoration.
+
+The next memory milestone will create Doxxer-owned kernel mappings, add guarded
+kernel stacks, and layer a small kernel heap on virtual mappings. PCID activation
+and SMP TLB shootdowns remain disabled until CPU discovery and inter-processor
+interrupt support exist.

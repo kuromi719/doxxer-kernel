@@ -3,6 +3,7 @@
 #include <doxxer/graphics/framebuffer.hpp>
 #include <doxxer/log.hpp>
 #include <doxxer/memory/physical.hpp>
+#include <doxxer/memory/virtual.hpp>
 #include <doxxer/panic.hpp>
 #include <doxxer/platform.hpp>
 
@@ -53,6 +54,14 @@ extern "C" [[noreturn]] void kernel_main() {
     log::write_decimal(memory_stats.metadata_pages);
     log::write("\n");
     log::success("PMM ONLINE");
+
+    if (!memory::virtual_memory::self_test()) {
+        log::write("[ERROR] VMM SELF-TEST STAGE: ");
+        log::write_decimal(memory::virtual_memory::self_test_failure());
+        log::write("\n");
+        panic("VIRTUAL MEMORY MANAGER SELF-TEST FAILED");
+    }
+    log::success("VMM ONLINE");
 
     const volatile limine_framebuffer_response* framebuffer_response =
         boot::framebuffer_request.response;

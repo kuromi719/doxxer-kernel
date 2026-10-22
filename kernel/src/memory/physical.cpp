@@ -357,8 +357,7 @@ bool free_contiguous(u64 physical_address, u64 page_count) {
 }
 
 void* direct_map(u64 physical_address) {
-    if (!state.initialized || physical_address / kPageSize >= state.page_count ||
-        state.hhdm_offset > static_cast<u64>(-1) - physical_address) {
+    if (!state.initialized || state.hhdm_offset > static_cast<u64>(-1) - physical_address) {
         return nullptr;
     }
     return reinterpret_cast<void*>(static_cast<uptr>(state.hhdm_offset + physical_address));
