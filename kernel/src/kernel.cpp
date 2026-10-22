@@ -333,6 +333,7 @@ extern "C" [[noreturn]] void kernel_main() {
     if (!arch::x86_64::protection::self_test()) {
         panic("CPU PROTECTION SELF-TEST FAILED");
     }
+    log::success("SUPERVISOR STACK WINDOWS ISOLATED");
     log::success("EXCEPTION AND GUARD SELF-TEST PASSED");
     arch::x86_64::protection::enter_kernel_stack(protected_kernel_main);
 }

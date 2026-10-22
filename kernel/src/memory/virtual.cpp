@@ -16,8 +16,31 @@ constexpr u64 kGlobal = 1ULL << 8U;
 constexpr u64 kNoExecute = 1ULL << 63U;
 constexpr u64 kAddressMask = 0x000F'FFFF'FFFF'F000ULL;
 constexpr u64 kPcidMaximum = 4095;
+constexpr u64 kProtectionWindowIndex = 0xE0;
+constexpr u64 kCpuWindowIndex = 0xE4;
+constexpr u64 kTaskWindowIndex = 0xE8;
 u32 last_self_test_failure = 0;
 AddressSpace* active_space = nullptr;
+sync::SpinLock supervisor_windows_lock{};
+
+class ConditionalLockGuard final {
+  public:
+    explicit ConditionalLockGuard(sync::SpinLock* lock) : lock_(lock) {
+        if (lock_ != nullptr) {
+            lock_->lock();
+        }
+    }
+    ~ConditionalLockGuard() {
+        if (lock_ != nullptr) {
+            lock_->unlock();
+        }
+    }
+    ConditionalLockGuard(const ConditionalLockGuard&) = delete;
+    ConditionalLockGuard& operator=(const ConditionalLockGuard&) = delete;
+
+  private:
+    sync::SpinLock* lock_;
+};
 
 struct alignas(4096) PageTable {
     u64 entries[kEntriesPerTable];
@@ -29,6 +52,10 @@ constexpr u64 pml4_index(u64 address) { return (address >> 39U) & 0x1FFU; }
 constexpr u64 pdpt_index(u64 address) { return (address >> 30U) & 0x1FFU; }
 constexpr u64 pd_index(u64 address) { return (address >> 21U) & 0x1FFU; }
 constexpr u64 pt_index(u64 address) { return (address >> 12U) & 0x1FFU; }
+constexpr bool supervisor_window_index(u64 index) {
+    return index == kProtectionWindowIndex || index == kCpuWindowIndex ||
+           index == kTaskWindowIndex;
+}
 
 PageTable* table_from_physical(u64 physical_address) {
     return static_cast<PageTable*>(physical::direct_map(physical_address & kAddressMask));
@@ -183,7 +210,7 @@ void prune_empty_path(AddressSpace& space, u64 virtual_address) {
             }
         }
     }
-    if (table_empty(pdpt)) {
+    if (table_empty(pdpt) && !supervisor_window_index(pml4_index(virtual_address))) {
         const u64 physical_address = pml4e & kAddressMask;
         pml4e = 0;
         physical::free_page(physical_address);
@@ -215,12 +242,16 @@ bool destroy_table(PageTable* table, u8 level) {
     return success;
 }
 
-bool destroy_user_half(PageTable* root) {
+bool destroy_user_half(PageTable* root, bool owns_supervisor_windows) {
     if (root == nullptr) {
         return false;
     }
     bool success = true;
     for (u64 index = 0; index < kEntriesPerTable / 2; ++index) {
+        if (!owns_supervisor_windows && supervisor_window_index(index)) {
+            root->entries[index] = 0;
+            continue;
+        }
         const u64 entry = root->entries[index];
         if ((entry & kPresent) == 0 || (entry & kHuge) != 0) {
             continue;
@@ -237,8 +268,13 @@ bool destroy_user_half(PageTable* root) {
     return success;
 }
 
-bool mutable_address(u64 virtual_address) {
-    return is_canonical(virtual_address) && pml4_index(virtual_address) < kEntriesPerTable / 2;
+bool mutable_address(const AddressSpace& space, u64 virtual_address) {
+    if (!is_canonical(virtual_address) ||
+        pml4_index(virtual_address) >= kEntriesPerTable / 2) {
+        return false;
+    }
+    return space.owns_supervisor_windows() ||
+           !supervisor_window_index(pml4_index(virtual_address));
 }
 
 bool query_unlocked(AddressSpace& space, u64 virtual_address, Mapping& mapping) {
@@ -299,6 +335,7 @@ bool create(AddressSpace& space, u16 pcid) {
     if (space.valid() || pcid > kPcidMaximum) {
         return false;
     }
+    sync::LockGuard supervisor_guard(supervisor_windows_lock);
     u64 root_physical = 0;
     PageTable* root = nullptr;
     if (!allocate_table(root_physical, root)) {
@@ -312,8 +349,24 @@ bool create(AddressSpace& space, u16 pcid) {
     for (u64 index = kEntriesPerTable / 2; index < kEntriesPerTable; ++index) {
         root->entries[index] = active_root->entries[index];
     }
+    const bool owns_supervisor_windows = active_space == nullptr;
+    if (owns_supervisor_windows) {
+        PageTable* window = nullptr;
+        if (!next_table(root->entries[kProtectionWindowIndex], false, true, window) ||
+            !next_table(root->entries[kCpuWindowIndex], false, true, window) ||
+            !next_table(root->entries[kTaskWindowIndex], false, true, window)) {
+            destroy_user_half(root, true);
+            physical::free_page(root_physical);
+            return false;
+        }
+    } else {
+        root->entries[kProtectionWindowIndex] = active_root->entries[kProtectionWindowIndex];
+        root->entries[kCpuWindowIndex] = active_root->entries[kCpuWindowIndex];
+        root->entries[kTaskWindowIndex] = active_root->entries[kTaskWindowIndex];
+    }
     space.root_physical_ = root_physical;
     space.pcid_ = pcid;
+    space.owns_supervisor_windows_ = owns_supervisor_windows;
     return true;
 }
 
@@ -321,18 +374,20 @@ bool destroy(AddressSpace& space) {
     if (!space.valid() || read_cr3_root() == space.root_physical()) {
         return false;
     }
+    sync::LockGuard supervisor_guard(supervisor_windows_lock);
     sync::LockGuard guard(space.lock_);
     PageTable* root = table_from_physical(space.root_physical());
     if (root == nullptr) {
         return false;
     }
     const u64 root_physical = space.root_physical();
-    bool success = destroy_user_half(root);
+    bool success = destroy_user_half(root, space.owns_supervisor_windows_);
     if (!physical::free_page(root_physical)) {
         success = false;
     }
     space.root_physical_ = 0;
     space.pcid_ = 0;
+    space.owns_supervisor_windows_ = false;
     return success;
 }
 
@@ -353,13 +408,16 @@ AddressSpace* active_address_space() { return active_space; }
 bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlags flags,
          PageSize page_size) {
     const u64 size = static_cast<u64>(page_size);
-    if (!space.valid() || !mutable_address(virtual_address) || !flags_valid(flags) ||
+    if (!space.valid() || !mutable_address(space, virtual_address) || !flags_valid(flags) ||
         (page_size != PageSize::size_4k && page_size != PageSize::size_2m) ||
         virtual_address % size != 0 || physical_address % size != 0 ||
         (physical_address & ~kAddressMask) != 0) {
         return false;
     }
 
+    ConditionalLockGuard supervisor_guard(supervisor_window_index(pml4_index(virtual_address))
+                                               ? &supervisor_windows_lock
+                                               : nullptr);
     sync::LockGuard guard(space.lock_);
     PageTable* pml4 = table_from_physical(space.root_physical());
     if (pml4 == nullptr) {
@@ -403,9 +461,13 @@ bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlag
 }
 
 bool unmap(AddressSpace& space, u64 virtual_address) {
-    if (!space.valid() || !mutable_address(virtual_address) || virtual_address % kPageSize != 0) {
+    if (!space.valid() || !mutable_address(space, virtual_address) ||
+        virtual_address % kPageSize != 0) {
         return false;
     }
+    ConditionalLockGuard supervisor_guard(supervisor_window_index(pml4_index(virtual_address))
+                                               ? &supervisor_windows_lock
+                                               : nullptr);
     sync::LockGuard guard(space.lock_);
     PageTable* pml4 = table_from_physical(space.root_physical());
     if (pml4 == nullptr) {
@@ -447,10 +509,13 @@ bool unmap(AddressSpace& space, u64 virtual_address) {
 }
 
 bool protect(AddressSpace& space, u64 virtual_address, MapFlags flags) {
-    if (!space.valid() || !mutable_address(virtual_address) || !flags_valid(flags) ||
+    if (!space.valid() || !mutable_address(space, virtual_address) || !flags_valid(flags) ||
         virtual_address % kPageSize != 0) {
         return false;
     }
+    ConditionalLockGuard supervisor_guard(supervisor_window_index(pml4_index(virtual_address))
+                                               ? &supervisor_windows_lock
+                                               : nullptr);
     sync::LockGuard guard(space.lock_);
     PageTable* pml4 = table_from_physical(space.root_physical());
     if (pml4 == nullptr) {
@@ -492,6 +557,9 @@ bool protect(AddressSpace& space, u64 virtual_address, MapFlags flags) {
 }
 
 bool query(AddressSpace& space, u64 virtual_address, Mapping& mapping) {
+    ConditionalLockGuard supervisor_guard(supervisor_window_index(pml4_index(virtual_address))
+                                               ? &supervisor_windows_lock
+                                               : nullptr);
     sync::LockGuard guard(space.lock_);
     return query_unlocked(space, virtual_address, mapping);
 }

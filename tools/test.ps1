@@ -52,6 +52,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] PMM ONLINE',
         '[OK] VMM ONLINE',
         '[OK] GDT TSS IDT ONLINE',
+        '[OK] SUPERVISOR STACK WINDOWS ISOLATED',
         '[OK] EXCEPTION AND GUARD SELF-TEST PASSED',
         '[OK] GUARDED KERNEL STACK ACTIVE',
         '[OK] HARDENED HEAP ONLINE',

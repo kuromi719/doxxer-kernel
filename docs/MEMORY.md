@@ -72,10 +72,12 @@ Current invariants and capabilities:
 - supervisor/user, global, execute, write, and cache policy are explicit;
 - missing pages naturally act as guard pages;
 - duplicate maps and repeated unmaps fail deterministically;
-- empty intermediate tables are pruned and returned to the physical allocator;
+- empty intermediate tables are pruned and returned to the physical allocator, except for the
+  reserved supervisor-window roots that preserve live sharing;
 - complete inactive address spaces can be destroyed without freeing leaf data;
-- new spaces inherit a shared, immutable kernel half while owning only their lower-half tables;
-- public mapping operations cannot mutate the shared kernel half;
+- new spaces inherit the kernel half plus three supervisor-only runtime-stack windows;
+- inherited supervisor windows remain immutable to child spaces and are excluded from teardown;
+- public mapping operations cannot mutate the shared kernel half or supervisor windows;
 - address-space identifiers retain a validated 12-bit PCID for later activation;
 - active-space edits perform local `invlpg` invalidation; and
 - page-table operations are lock-protected in preparation for SMP.
@@ -92,6 +94,13 @@ boot mappings and whose lower half contains supervisor-only runtime and
 exception stacks. Every 64 KiB stack is non-executable and isolated between an
 unmapped lower and upper guard page. The boot stack is abandoned after the new
 GDT, TSS, IDT, and fault probes are validated.
+
+Process address spaces share only the lower-half PML4 entries reserved for protection, per-CPU,
+and scheduler stacks. Leaf mappings stay supervisor-only. Child mapping APIs reject those windows,
+and child destruction detaches rather than frees the shared page-table trees. This ensures that a
+future privilege transition can reach its TSS and syscall stack without granting user access or
+creating double-free ownership. A dedicated lock serializes updates and queries across these shared
+trees while independent user mappings retain per-address-space locking.
 
 The virtual layer now also backs a bounded 64 MiB kernel heap arena. Slab and
 large allocations are supervisor-only, writable, and NX; every backing region

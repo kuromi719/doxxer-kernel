@@ -171,6 +171,54 @@ bool descriptor_state_valid() {
     asm volatile("str %0" : "=r"(task_selector));
     return code_selector == 0x08 && stack_selector == 0x10 && task_selector == kTaskStateSelector;
 }
+
+bool supervisor_windows_valid() {
+    constexpr u64 kDynamicProbe = 0x0000'7200'FF00'0000ULL;
+    AddressSpace process_space{};
+    memory::virtual_memory::Mapping inherited{};
+    const u64 stack_address = kernel_stack.virtual_base + kPageSize;
+    if (!memory::virtual_memory::create(process_space, 4095)) {
+        return false;
+    }
+
+    bool valid = memory::virtual_memory::query(process_space, stack_address, inherited) &&
+                 !memory::virtual_memory::has_flag(inherited.flags, MapFlags::user) &&
+                 !memory::virtual_memory::map(process_space, kernel_stack.virtual_base,
+                                              inherited.physical_address, MapFlags::write) &&
+                 !memory::virtual_memory::unmap(process_space, stack_address) &&
+                 !memory::virtual_memory::protect(process_space, stack_address, MapFlags::write);
+
+    u64 probe_page = 0;
+    bool probe_mapped = false;
+    if (!memory::physical::allocate_page(probe_page)) {
+        valid = false;
+    } else if (!memory::virtual_memory::map(kernel_space, kDynamicProbe, probe_page,
+                                            MapFlags::write)) {
+        valid = false;
+    } else {
+        probe_mapped = true;
+        memory::virtual_memory::Mapping dynamic_mapping{};
+        valid = memory::virtual_memory::query(process_space, kDynamicProbe, dynamic_mapping) &&
+                dynamic_mapping.physical_address == probe_page &&
+                !memory::virtual_memory::has_flag(dynamic_mapping.flags, MapFlags::user) && valid;
+    }
+
+    if (probe_mapped) {
+        const bool unmapped = memory::virtual_memory::unmap(kernel_space, kDynamicProbe);
+        valid = unmapped && valid;
+        if (unmapped) {
+            probe_mapped = false;
+            memory::virtual_memory::Mapping removed{};
+            valid = !memory::virtual_memory::query(process_space, kDynamicProbe, removed) && valid;
+        }
+    }
+    if (probe_page != 0 && !probe_mapped) {
+        valid = memory::physical::free_page(probe_page) && valid;
+    }
+    valid = memory::virtual_memory::destroy(process_space) && valid;
+    valid = memory::virtual_memory::query(kernel_space, stack_address, inherited) && valid;
+    return valid;
+}
 }
 
 bool initialize() {
@@ -193,9 +241,15 @@ bool initialize() {
 }
 
 bool self_test() {
-    return initialized && stack_layout_valid(kernel_stack) && stack_layout_valid(exception_stack) &&
-           stack_layout_valid(emergency_stack) && descriptor_state_valid() &&
-           interrupts::self_test(kernel_stack.virtual_base,
+    if (!initialized || !stack_layout_valid(kernel_stack) ||
+        !stack_layout_valid(exception_stack) || !stack_layout_valid(emergency_stack) ||
+        !descriptor_state_valid()) {
+        return false;
+    }
+    if (!supervisor_windows_valid()) {
+        return false;
+    }
+    return interrupts::self_test(kernel_stack.virtual_base,
                                  exception_stack.virtual_base + kPageSize, exception_stack.top());
 }
 

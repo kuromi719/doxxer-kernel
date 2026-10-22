@@ -41,6 +41,7 @@ class AddressSpace final {
     bool valid() const { return root_physical_ != 0; }
     u64 root_physical() const { return root_physical_; }
     u16 pcid() const { return pcid_; }
+    bool owns_supervisor_windows() const { return owns_supervisor_windows_; }
 
   private:
     friend bool create(AddressSpace&, u16);
@@ -52,6 +53,7 @@ class AddressSpace final {
 
     u64 root_physical_ = 0;
     u16 pcid_ = 0;
+    bool owns_supervisor_windows_ = false;
     sync::SpinLock lock_{};
 };
 
