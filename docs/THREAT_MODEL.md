@@ -28,6 +28,10 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 - Physical pages are wiped both when allocated and when returned, limiting cross-subsystem data remnants.
 - New address spaces enforce NX by default and reject writable-executable mappings; unmapped guard pages remain non-present.
 - Page-table operations reject non-canonical addresses, misalignment, duplicate mappings, and invalid huge-page operations.
+- The active kernel address space uses supervisor-only, NX stacks with unmapped guards on both ends.
+- A private GDT/TSS/IDT routes exceptions through known assembly frames and dedicated IST stacks; double fault, NMI, and machine check use the emergency IST.
+- Boot probes exercise a breakpoint and a real guard-page fault, including recovery and verification that exception frames landed on the intended IST.
+- Fatal exceptions report vector, error code, CR2, control state, and general registers before halting with interrupts disabled.
 - Serial panic diagnostics followed by an interrupt-disabled halt.
 
 ## Out of scope for milestone 1
@@ -40,4 +44,4 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 
 ## Planned direction
 
-Future milestones should activate Doxxer-owned kernel page tables, add exception handling, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Each milestone must update this document before expanding the trusted computing base.
+Future milestones should rebuild inherited kernel mappings with section-granular permissions, add APIC interrupt routing, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Each milestone must update this document before expanding the trusted computing base.

@@ -335,6 +335,14 @@ bool destroy(AddressSpace& space) {
     return success;
 }
 
+bool activate(AddressSpace& space) {
+    if (!space.valid() || space.pcid() != 0) {
+        return false;
+    }
+    write_cr3(space.root_physical());
+    return read_cr3_root() == space.root_physical();
+}
+
 bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlags flags,
          PageSize page_size) {
     const u64 size = static_cast<u64>(page_size);

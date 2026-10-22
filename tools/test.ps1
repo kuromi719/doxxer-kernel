@@ -31,7 +31,19 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         throw "$Name produced no serial log (exit $($process.ExitCode)): $details"
     }
     $serial = Get-Content -LiteralPath $log -Raw
-    foreach ($marker in @('DOXXER_BOOT_START','[OK] SERIAL ONLINE','[OK] STACK GUARD SEEDED','[OK] PMM ONLINE','[OK] VMM ONLINE','[OK] FRAMEBUFFER ONLINE','DOXXER_BOOT_OK')) {
+    $markers = @(
+        'DOXXER_BOOT_START',
+        '[OK] SERIAL ONLINE',
+        '[OK] STACK GUARD SEEDED',
+        '[OK] PMM ONLINE',
+        '[OK] VMM ONLINE',
+        '[OK] GDT TSS IDT ONLINE',
+        '[OK] EXCEPTION AND GUARD SELF-TEST PASSED',
+        '[OK] GUARDED KERNEL STACK ACTIVE',
+        '[OK] FRAMEBUFFER ONLINE',
+        'DOXXER_BOOT_OK'
+    )
+    foreach ($marker in $markers) {
         if (-not $serial.Contains($marker)) { throw "$Name missing marker '$marker'. See $log" }
     }
     if ($process.ExitCode -ne 33) { throw "$Name returned $($process.ExitCode), expected 33. See $log" }

@@ -87,7 +87,13 @@ hardware alias, restores the boot address space, changes permissions, unmaps bot
 mappings, destroys the page-table tree, and verifies exact physical-page
 accounting restoration.
 
-The next memory milestone will create Doxxer-owned kernel mappings, add guarded
-kernel stacks, and layer a small kernel heap on virtual mappings. PCID activation
-and SMP TLB shootdowns remain disabled until CPU discovery and inter-processor
-interrupt support exist.
+The kernel now activates an owned PML4 whose upper half inherits the immutable
+boot mappings and whose lower half contains supervisor-only runtime and
+exception stacks. Every 64 KiB stack is non-executable and isolated between an
+unmapped lower and upper guard page. The boot stack is abandoned after the new
+GDT, TSS, IDT, and fault probes are validated.
+
+The next memory milestone will reconstruct the inherited upper half with
+Doxxer-owned section-granular mappings and layer a small kernel heap on virtual
+mappings. PCID activation and SMP TLB shootdowns remain disabled until CPU
+discovery and inter-processor interrupt support exist.

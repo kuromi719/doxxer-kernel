@@ -15,12 +15,15 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Contiguous and aligned page allocation with boot-time invariants
 - Four-level x86_64 virtual memory manager with NX-by-default W^X mappings
 - Isolated address spaces, guard pages, PCID metadata, and 2 MiB page support
+- Kernel-owned active address space with guarded runtime and exception stacks
+- Private GDT/TSS/IDT, 256 interrupt stubs, and register-rich exception diagnostics
+- Boot-time breakpoint, IST-routing, and real guard-page fault recovery tests
 - W^X-compatible ELF segments and non-executable stack
 - Bootable GPT/FAT disk image and UEFI ISO
 - Automated disk and ISO smoke tests
 - High-memory QEMU test covering the allocator's normal-memory zone
 
-Interrupts, user mode, networking, drivers, Secure Boot, and physical-hardware support are intentionally deferred.
+External interrupt controllers, user mode, networking, drivers, Secure Boot, and physical-hardware support are intentionally deferred.
 
 ## Prerequisites
 
@@ -68,6 +71,7 @@ Artifacts are written to `build/doxxer-kernel.elf`, `dist/doxxer-uefi.img`, and 
 5. Treat reproducible and auditable builds as a security feature.
 
 See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
+[`docs/CPU_PROTECTION.md`](docs/CPU_PROTECTION.md) for descriptor, exception, and stack design,
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the initial threat model, and
 [`SECURITY.md`](SECURITY.md) for reporting guidance.
 

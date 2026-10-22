@@ -18,7 +18,9 @@ DISK := $(DIST_DIR)/doxxer-uefi.img
 
 CXX := clang++
 SOURCES := $(shell find kernel/src -name '*.cpp' -print | sort)
-OBJECTS := $(patsubst kernel/src/%.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
+ASSEMBLY_SOURCES := $(shell find kernel/src -name '*.S' -print | sort)
+OBJECTS := $(patsubst kernel/src/%.cpp,$(OBJ_DIR)/%.o,$(SOURCES)) \
+    $(patsubst kernel/src/%.S,$(OBJ_DIR)/%.S.o,$(ASSEMBLY_SOURCES))
 DEPS := $(OBJECTS:.o=.d)
 
 COMMON_FLAGS := \
@@ -64,6 +66,10 @@ $(OBJ_DIR)/memory.o: kernel/src/memory.cpp
 $(OBJ_DIR)/%.o: kernel/src/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(COMMON_FLAGS) $(PROTECTED_FLAGS) -c $< -o $@
+
+$(OBJ_DIR)/%.S.o: kernel/src/%.S
+	@mkdir -p $(@D)
+	$(CXX) -target x86_64-unknown-none-elf -m64 -c $< -o $@
 
 $(KERNEL): $(OBJECTS) kernel/linker.ld
 	@mkdir -p $(BUILD_DIR)

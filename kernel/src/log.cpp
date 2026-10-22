@@ -34,6 +34,17 @@ void write_decimal(unsigned long long value) {
     write(buffer);
 }
 
+void write_hex(unsigned long long value) {
+    constexpr char digits[] = "0123456789ABCDEF";
+    char buffer[19] = {'0', 'x'};
+    for (usize index = 0; index < 16; ++index) {
+        const usize shift = (15 - index) * 4;
+        buffer[index + 2] = digits[(value >> shift) & 0xFU];
+    }
+    buffer[18] = '\0';
+    write(buffer);
+}
+
 void line(const char* text) {
     write(text);
     write("\n");

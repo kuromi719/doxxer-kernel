@@ -1,3 +1,4 @@
+#include <doxxer/arch/x86_64/protection.hpp>
 #include <doxxer/arch/x86_64/serial.hpp>
 #include <doxxer/boot/requests.hpp>
 #include <doxxer/graphics/framebuffer.hpp>
@@ -6,6 +7,35 @@
 #include <doxxer/memory/virtual.hpp>
 #include <doxxer/panic.hpp>
 #include <doxxer/platform.hpp>
+
+namespace {
+[[noreturn]] void protected_kernel_main() {
+    using namespace doxxer;
+
+    if (!arch::x86_64::protection::on_kernel_stack()) {
+        panic("KERNEL STACK TRANSITION FAILED");
+    }
+    log::success("GUARDED KERNEL STACK ACTIVE");
+
+    const volatile limine_framebuffer_response* framebuffer_response =
+        boot::framebuffer_request.response;
+    if (framebuffer_response == nullptr || framebuffer_response->framebuffers == nullptr ||
+        framebuffer_response->framebuffer_count == 0) {
+        panic("FRAMEBUFFER UNAVAILABLE");
+    }
+
+    if (!graphics::initialize(framebuffer_response->framebuffers[0])) {
+        panic("UNSUPPORTED FRAMEBUFFER");
+    }
+    graphics::draw_boot_banner();
+    log::attach_framebuffer();
+    log::success("FRAMEBUFFER ONLINE");
+    log::success("KERNEL READY");
+    log::line("DOXXER_BOOT_OK");
+
+    platform::test_success();
+}
+}
 
 extern "C" [[noreturn]] void kernel_main() {
     using namespace doxxer;
@@ -63,21 +93,13 @@ extern "C" [[noreturn]] void kernel_main() {
     }
     log::success("VMM ONLINE");
 
-    const volatile limine_framebuffer_response* framebuffer_response =
-        boot::framebuffer_request.response;
-    if (framebuffer_response == nullptr || framebuffer_response->framebuffers == nullptr ||
-        framebuffer_response->framebuffer_count == 0) {
-        panic("FRAMEBUFFER UNAVAILABLE");
+    if (!arch::x86_64::protection::initialize()) {
+        panic("CPU PROTECTION INITIALIZATION FAILED");
     }
-
-    if (!graphics::initialize(framebuffer_response->framebuffers[0])) {
-        panic("UNSUPPORTED FRAMEBUFFER");
+    log::success("GDT TSS IDT ONLINE");
+    if (!arch::x86_64::protection::self_test()) {
+        panic("CPU PROTECTION SELF-TEST FAILED");
     }
-    graphics::draw_boot_banner();
-    log::attach_framebuffer();
-    log::success("FRAMEBUFFER ONLINE");
-    log::success("KERNEL READY");
-    log::line("DOXXER_BOOT_OK");
-
-    platform::test_success();
+    log::success("EXCEPTION AND GUARD SELF-TEST PASSED");
+    arch::x86_64::protection::enter_kernel_stack(protected_kernel_main);
 }
