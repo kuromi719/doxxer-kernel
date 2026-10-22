@@ -11,6 +11,9 @@ struct Message {
     u64 sequence;
     u16 kind;
     u16 length;
+    bool has_capability;
+    security::capability::DomainHandle capability_domain;
+    security::capability::Token capability;
     u8 payload[kMaximumPayloadSize];
 };
 
@@ -39,6 +42,12 @@ bool destroy(security::capability::DomainHandle owner,
              security::capability::Token administrator);
 bool send(security::capability::DomainHandle domain, security::capability::Token endpoint, u16 kind,
           const void* payload, usize length, u64 sequence);
+bool send_with_capability(security::capability::DomainHandle domain,
+                          security::capability::Token endpoint,
+                          security::capability::DomainHandle destination_domain,
+                          security::capability::Token source_capability,
+                          security::capability::Rights delegated_rights, u16 kind,
+                          const void* payload, usize length, u64 sequence);
 bool receive(security::capability::DomainHandle domain, security::capability::Token endpoint,
              Message& message);
 bool self_test();

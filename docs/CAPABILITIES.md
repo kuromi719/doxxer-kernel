@@ -63,7 +63,7 @@ Every negative test must be rejected before the capability model is declared onl
 ## Deferred work
 
 - Per-process domain ownership and syscall copying
-- Attaching delegated tokens to IPC message envelopes
+- Revocation notifications for queued or blocked receivers
 - Object-specific policy adapters
 - Audit identities and structured denial telemetry
 - Scalable registries beyond the fixed prototype limits

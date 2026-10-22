@@ -59,6 +59,32 @@ bool equal_bytes(const u8* left, const u8* right, usize length) {
     }
     return true;
 }
+
+bool enqueue(Channel& channel, u16 kind, const void* payload, usize length, u64 sequence,
+             bool has_capability, security::capability::DomainHandle capability_domain,
+             security::capability::Token capability) {
+    sync::LockGuard guard(channel.lock);
+    if (!channel.active || channel.count >= kChannelDepth) {
+        return false;
+    }
+    Message& message = channel.messages[channel.tail];
+    message.sequence = sequence;
+    message.kind = kind;
+    message.length = static_cast<u16>(length);
+    message.has_capability = has_capability;
+    message.capability_domain = capability_domain;
+    message.capability = capability;
+    const auto* bytes = static_cast<const u8*>(payload);
+    for (usize index = 0; index < length; ++index) {
+        message.payload[index] = bytes[index];
+    }
+    for (usize index = length; index < kMaximumPayloadSize; ++index) {
+        message.payload[index] = 0;
+    }
+    channel.tail = (channel.tail + 1) % kChannelDepth;
+    ++channel.count;
+    return true;
+}
 }
 
 bool initialize() {
@@ -93,10 +119,14 @@ bool create(security::capability::DomainHandle owner, ChannelHandle& handle,
             return false;
         }
         const auto sender_rights = security::capability::Right::inspect |
-                                   security::capability::Right::write;
+                                   security::capability::Right::write |
+                                   security::capability::Right::derive |
+                                   security::capability::Right::transfer;
         const auto receiver_rights = security::capability::Right::inspect |
                                      security::capability::Right::read |
-                                     security::capability::Right::wait;
+                                     security::capability::Right::wait |
+                                     security::capability::Right::derive |
+                                     security::capability::Right::transfer;
         const auto administrator_rights = security::capability::Right::inspect |
                                           security::capability::Right::administer;
         if (!security::capability::grant(owner, channel.object, sender_rights, endpoints.sender) ||
@@ -132,6 +162,15 @@ bool destroy(security::capability::DomainHandle owner,
     const security::capability::ObjectHandle object = channel->object;
     {
         sync::LockGuard guard(channel->lock);
+        for (usize index = 0; index < channel->count; ++index) {
+            const usize slot = (channel->head + index) % kChannelDepth;
+            if (channel->messages[slot].has_capability) {
+                (void)security::capability::revoke(
+                    channel->messages[slot].capability_domain,
+                    channel->messages[slot].capability);
+            }
+            channel->messages[slot] = {};
+        }
         channel->active = false;
         channel->head = 0;
         channel->tail = 0;
@@ -158,28 +197,44 @@ bool send(security::capability::DomainHandle domain, security::capability::Token
     if (channel == nullptr) {
         return false;
     }
-    bool success = false;
-    {
-        sync::LockGuard guard(channel->lock);
-        if (channel->active && channel->count < kChannelDepth) {
-            Message& message = channel->messages[channel->tail];
-            message.sequence = sequence;
-            message.kind = kind;
-            message.length = static_cast<u16>(length);
-            const auto* bytes = static_cast<const u8*>(payload);
-            for (usize index = 0; index < length; ++index) {
-                message.payload[index] = bytes[index];
-            }
-            for (usize index = length; index < kMaximumPayloadSize; ++index) {
-                message.payload[index] = 0;
-            }
-            channel->tail = (channel->tail + 1) % kChannelDepth;
-            ++channel->count;
-            success = true;
-        }
-    }
+    const bool success = enqueue(*channel, kind, payload, length, sequence, false, {}, {});
     security::capability::release(lease);
     if (!success) {
+        reject();
+        return false;
+    }
+    __atomic_add_fetch(&sent_messages, 1ULL, __ATOMIC_RELAXED);
+    return true;
+}
+
+bool send_with_capability(security::capability::DomainHandle domain,
+                          security::capability::Token endpoint,
+                          security::capability::DomainHandle destination_domain,
+                          security::capability::Token source_capability,
+                          security::capability::Rights delegated_rights, u16 kind,
+                          const void* payload, usize length, u64 sequence) {
+    if (length > kMaximumPayloadSize || (length != 0 && payload == nullptr)) {
+        reject();
+        return false;
+    }
+    security::capability::Lease lease{};
+    Channel* channel = acquire_channel(
+        domain, endpoint, security::capability::rights(security::capability::Right::write), lease);
+    if (channel == nullptr) {
+        return false;
+    }
+    security::capability::Token delegated{};
+    if (!security::capability::delegate(domain, source_capability, destination_domain,
+                                        delegated_rights, delegated)) {
+        security::capability::release(lease);
+        reject();
+        return false;
+    }
+    const bool success =
+        enqueue(*channel, kind, payload, length, sequence, true, destination_domain, delegated);
+    security::capability::release(lease);
+    if (!success) {
+        (void)security::capability::revoke(destination_domain, delegated);
         reject();
         return false;
     }
@@ -218,14 +273,43 @@ bool receive(security::capability::DomainHandle domain, security::capability::To
 bool self_test() {
     last_failure = 0;
     security::capability::DomainHandle domain{};
+    security::capability::DomainHandle receiver_domain{};
+    security::capability::ObjectHandle transferred_object{};
+    security::capability::Token transferred_root{};
+    security::capability::Token received_capability{};
+    security::capability::Lease transferred_lease{};
     ChannelHandle channel{};
     Endpoints endpoints{};
     Message message{};
     const u8 probe[] = {0x44, 0x58, 0x49, 0x50, 0x43};
-    if (!security::capability::create_domain(domain) || !create(domain, channel, endpoints)) {
+    u64 transferred_probe = 0xD0'58'49'50'43'43'41'50ULL;
+    if (!security::capability::create_domain(domain) ||
+        !security::capability::create_domain(receiver_domain) ||
+        !security::capability::register_object(security::capability::ObjectType::kernel_service,
+                                               &transferred_probe, transferred_object) ||
+        !security::capability::grant(
+            domain, transferred_object,
+            security::capability::Right::read | security::capability::Right::transfer,
+            transferred_root) ||
+        !create(domain, channel, endpoints)) {
         last_failure = 1;
         return false;
     }
+    if (!send_with_capability(domain, endpoints.sender, receiver_domain, transferred_root,
+                              security::capability::rights(security::capability::Right::read), 8,
+                              nullptr, 0, 43) ||
+        !receive(domain, endpoints.receiver, message) || !message.has_capability ||
+        !security::capability::acquire(receiver_domain, message.capability,
+                                       security::capability::ObjectType::kernel_service,
+                                       security::capability::rights(
+                                           security::capability::Right::read),
+                                       transferred_lease) ||
+        transferred_lease.object != &transferred_probe) {
+        last_failure = 3;
+        return false;
+    }
+    security::capability::release(transferred_lease);
+    received_capability = message.capability;
     if (!send(domain, endpoints.sender, 7, probe, sizeof(probe), 42) ||
         !receive(domain, endpoints.receiver, message) || message.sequence != 42 ||
         message.kind != 7 || message.length != sizeof(probe) ||
@@ -236,29 +320,37 @@ bool self_test() {
     if (receive(domain, endpoints.receiver, message) ||
         send(domain, endpoints.receiver, 0, nullptr, 0, 0) ||
         send(domain, endpoints.sender, 0, probe, kMaximumPayloadSize + 1, 0)) {
-        last_failure = 3;
+        last_failure = 4;
         return false;
     }
     for (usize index = 0; index < kChannelDepth; ++index) {
         if (!send(domain, endpoints.sender, 9, nullptr, 0, index)) {
-            last_failure = 4;
+            last_failure = 5;
             return false;
         }
     }
     if (send(domain, endpoints.sender, 9, nullptr, 0, 99)) {
-        last_failure = 5;
+        last_failure = 6;
         return false;
     }
     for (usize index = 0; index < kChannelDepth; ++index) {
         if (!receive(domain, endpoints.receiver, message) || message.sequence != index) {
-            last_failure = 6;
+            last_failure = 7;
             return false;
         }
     }
-    if (!destroy(domain, endpoints.administrator) ||
+    if (!security::capability::revoke(domain, transferred_root) ||
+        security::capability::acquire(receiver_domain, received_capability,
+                                      security::capability::ObjectType::kernel_service,
+                                      security::capability::rights(
+                                          security::capability::Right::read),
+                                      transferred_lease) ||
+        !destroy(domain, endpoints.administrator) ||
         send(domain, endpoints.sender, 0, nullptr, 0, 0) ||
+        !security::capability::unregister_object(transferred_object) ||
+        !security::capability::destroy_domain(receiver_domain) ||
         !security::capability::destroy_domain(domain)) {
-        last_failure = 7;
+        last_failure = 8;
         return false;
     }
     return true;

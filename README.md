@@ -31,6 +31,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Entropy-keyed 36-bit token authentication plus generational stale-handle rejection
 - Cross-domain capability delegation with rights attenuation and source-revocation ancestry
 - Capability-gated bounded IPC channels with split send, receive, and administration endpoints
+- Transactional capability attachment to IPC messages with cross-domain attenuation
 - Manual- and auto-reset capability events with non-blocking, allocation-free wait semantics
 - Isolated process containers with private address spaces, capability domains, and explicit lifecycle
 - Pointer-free versioned syscall request ABI for IPC, events, and process control

@@ -12,6 +12,8 @@ allocation-free message transport for future system services.
 - Destroying a channel invalidates its registered object generation, so all surviving endpoint
   tokens become stale.
 - Payload tail bytes are cleared and consumed slots are zeroed.
+- A message may carry one capability delegated into a destination domain. Delegation completes
+  before enqueue, and queue-full failure revokes the new token transactionally.
 
 Blocking waits and capability transfer are intentionally separate mechanisms. This keeps channel
 ownership, scheduling, and authority delegation auditable rather than hiding them in one API.
