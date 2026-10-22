@@ -9,6 +9,7 @@
 #include <doxxer/log.hpp>
 #include <doxxer/memory/heap.hpp>
 #include <doxxer/memory/physical.hpp>
+#include <doxxer/memory/user_copy.hpp>
 #include <doxxer/memory/virtual.hpp>
 #include <doxxer/panic.hpp>
 #include <doxxer/platform.hpp>
@@ -129,6 +130,18 @@ namespace {
     log::write_decimal(service_stats.resolutions);
     log::write(" RESOLVED\n");
     log::success("CAPABILITY SERVICE REGISTRY ONLINE");
+
+    if (!memory::user_copy::self_test()) {
+        log::write("[ERROR] USER COPY SELF-TEST STAGE: ");
+        log::write_decimal(memory::user_copy::failure_code());
+        log::write("\n");
+        panic("USER MEMORY COPY SELF-TEST FAILED");
+    }
+    const memory::user_copy::Statistics copy_stats = memory::user_copy::statistics();
+    log::write("[INFO] USER COPY BYTES VERIFIED: ");
+    log::write_decimal(copy_stats.bytes_copied);
+    log::write("\n");
+    log::success("VALIDATED USER MEMORY ACCESS ONLINE");
 
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");
