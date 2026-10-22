@@ -19,6 +19,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Private GDT/TSS/IDT, 256 interrupt stubs, and register-rich exception diagnostics
 - Boot-time breakpoint, IST-routing, and real guard-page fault recovery tests
 - Hardened slab/page kernel heap with keyed canaries, quarantine, and secure wiping
+- Entropy-derived ChaCha20 + HMAC-SHA-256 sealed-memory vault for idle secrets
 - Checksummed RSDP/XSDT, MADT, and HPET discovery with bounded ACPI parsing
 - Explicit uncached MMIO mappings for Local APIC, I/O APIC, and HPET registers
 - Legacy PIC shutdown, fail-closed I/O APIC masking, and calibrated periodic APIC timer
@@ -115,6 +116,7 @@ See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
 [`docs/CPU_HARDENING.md`](docs/CPU_HARDENING.md) for mandatory per-processor controls,
 [`docs/CPU_PROTECTION.md`](docs/CPU_PROTECTION.md) for descriptor, exception, and stack design,
 [`docs/HEAP.md`](docs/HEAP.md) for dynamic allocation invariants,
+[`docs/SEALED_MEMORY.md`](docs/SEALED_MEMORY.md) for authenticated encryption of idle secrets,
 [`docs/INTERRUPTS.md`](docs/INTERRUPTS.md) for ACPI and interrupt-controller design,
 [`docs/SMP.md`](docs/SMP.md) for multiprocessor and CPU-local invariants,
 [`docs/SCHEDULER.md`](docs/SCHEDULER.md) for kernel task dispatch and isolation,

@@ -21,6 +21,7 @@
 #include <doxxer/scheduler/scheduler.hpp>
 #include <doxxer/security/capability.hpp>
 #include <doxxer/security/image_policy.hpp>
+#include <doxxer/security/sealed_memory.hpp>
 #include <doxxer/service/registry.hpp>
 #include <doxxer/sync/event.hpp>
 #include <doxxer/syscall/dispatcher.hpp>
@@ -367,6 +368,24 @@ extern "C" [[noreturn]] void kernel_main() {
         panic("BOOT ENTROPY UNAVAILABLE");
     }
     log::success("STACK GUARD SEEDED");
+
+    if (!security::sealed_memory::initialize(entropy->values, entropy->value_count) ||
+        !security::sealed_memory::self_test()) {
+        log::write("[ERROR] SEALED MEMORY SELF-TEST STAGE: ");
+        log::write_decimal(security::sealed_memory::failure_code());
+        log::write("\n");
+        panic("SEALED MEMORY INITIALIZATION FAILED");
+    }
+    const security::sealed_memory::Statistics sealed_stats =
+        security::sealed_memory::statistics();
+    log::write("[INFO] SEALED MEMORY: ");
+    log::write_decimal(sealed_stats.sealed_objects);
+    log::write(" SEALS / ");
+    log::write_decimal(sealed_stats.authentication_failures);
+    log::write(" TAMPER REJECTIONS / CAPACITY ");
+    log::write_decimal(sealed_stats.capacity);
+    log::write("\n");
+    log::success("AUTHENTICATED SEALED MEMORY ONLINE");
 
     const volatile limine_bootloader_info_response* bootloader =
         boot::bootloader_info_request.response;

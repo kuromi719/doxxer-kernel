@@ -50,6 +50,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         'DOXXER_BOOT_START',
         '[OK] SERIAL ONLINE',
         '[OK] STACK GUARD SEEDED',
+        '[OK] AUTHENTICATED SEALED MEMORY ONLINE',
         '[OK] PMM ONLINE',
         '[OK] SEALED SHADOW PAGE LEDGER ONLINE',
         '[OK] VMM ONLINE',
