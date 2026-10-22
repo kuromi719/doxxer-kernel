@@ -45,13 +45,14 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 - Task handles include generations to reject stale release/completion operations. Queue and lifecycle publication use locks plus acquire/release atomics, while IPI wakeups carry no caller-controlled function pointer.
 - Kernel authority is represented by typed, rights-limited capabilities rather than ambient global handles. Derived capabilities cannot gain rights, and revoking any ancestor invalidates its entire descendant chain without a global scan.
 - Executable images are copied into bounded kernel-owned snapshots, measured with SHA-256, and admitted only when their digest was enrolled before the image policy was irreversibly sealed. Unknown or post-seal enrollment attempts fail closed.
+- ACPI DMAR structures are checksum- and bounds-validated, and every accepted VT-d unit is switched to an empty-root default-deny domain before device drivers or user execution start. Boot fails unless DMAR scopes cover every discovered non-host PCI requester.
 - Capability tokens combine a slot, a 22-bit generation, and an entropy-keyed 36-bit authentication tag. Tokens are validated against their domain nonce, complete metadata, parent chain, object type, and required rights before use.
 - Object access returns a pinned lease. Destruction fails while leases exist, preventing capability validation from becoming a time-of-check/time-of-use pointer race.
 - Serial panic diagnostics followed by an interrupt-disabled halt.
 
 ## Out of scope for milestone 1
 
-- Physical attackers and evil-maid attacks.
+- Physical attackers and evil-maid attacks. Default-deny PCI DMA is enforced on the supported Intel VT-d path, but physical replacement, debug interfaces, cold-boot extraction, and malicious hardware remain outside the current proof.
 - Malicious firmware, hypervisor, bootloader, compiler, or hardware.
 - Secure Boot, TPM attestation, and disk encryption. Kernel-side executable measurement is now present, but firmware-to-kernel authenticity is not yet established.
 - Side-channel resistance.

@@ -18,6 +18,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
     $args = @(
         '-machine','q35','-smp',"$Processors",'-m',$Memory,'-display','none','-monitor','none',
         '-drive',"if=pflash,format=raw,readonly=on,file=$firmware",
+        '-device','intel-iommu,intremap=off',
         '-serial',"file:$log",'-no-reboot',
         '-device','isa-debug-exit'
     ) + $MediaArgs
@@ -67,6 +68,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] SEALED IMAGE TRUST POLICY ONLINE',
         '[OK] GUARDED USER THREAD CONTEXTS ONLINE',
         '[OK] ACPI TABLES VALIDATED',
+        '[OK] DMA REMAPPING DEFAULT-DENY',
         '[OK] LOCAL APIC ONLINE',
         '[OK] IOAPIC MASKED',
         '[OK] PER-CPU RUNTIME ONLINE',

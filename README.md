@@ -41,6 +41,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Closed-by-default executable policy with SHA-256 measurements and irreversible boot-time sealing
 - Capability-owned user-thread contexts with pinned process spaces and guarded stacks
 - Immutable supervisor stack windows shared into processes without user accessibility or ownership
+- Fail-closed Intel VT-d activation with an empty root table that denies all PCI DMA by default
 - W^X-compatible ELF segments and non-executable stack
 - Bootable GPT/FAT disk image and UEFI ISO
 - Automated disk and ISO smoke tests

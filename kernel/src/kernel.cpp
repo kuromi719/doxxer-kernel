@@ -1,4 +1,5 @@
 #include <doxxer/arch/x86_64/apic.hpp>
+#include <doxxer/arch/x86_64/iommu.hpp>
 #include <doxxer/arch/x86_64/protection.hpp>
 #include <doxxer/arch/x86_64/serial.hpp>
 #include <doxxer/arch/x86_64/smp.hpp>
@@ -205,6 +206,28 @@ namespace {
     log::write_decimal(topology->io_apic_count);
     log::write("\n");
     log::success("ACPI TABLES VALIDATED");
+
+    if (!arch::x86_64::iommu::initialize(*topology) ||
+        !arch::x86_64::iommu::self_test()) {
+        log::write("[ERROR] IOMMU FAILURE STAGE: ");
+        log::write_decimal(arch::x86_64::iommu::failure_code());
+        log::write("\n");
+        panic("DMA ISOLATION UNAVAILABLE");
+    }
+    const arch::x86_64::iommu::Statistics iommu_stats =
+        arch::x86_64::iommu::statistics();
+    log::write("[INFO] IOMMU UNITS: ");
+    log::write_decimal(iommu_stats.enabled_units);
+    log::write(" / DMA WIDTH: ");
+    log::write_decimal(iommu_stats.dma_address_width);
+    log::write(" / PCI COVERAGE: ");
+    log::write_decimal(topology->dma_covered_functions);
+    log::write("/");
+    log::write_decimal(topology->pci_functions);
+    log::write(" / BUS MASTER OFF: ");
+    log::write_decimal(iommu_stats.quiesced_pci_functions);
+    log::write("\n");
+    log::success("DMA REMAPPING DEFAULT-DENY");
 
     if (!arch::x86_64::apic::initialize(*topology)) {
         log::write("[ERROR] APIC FAILURE STAGE: ");

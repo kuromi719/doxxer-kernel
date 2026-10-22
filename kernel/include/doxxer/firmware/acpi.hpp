@@ -7,6 +7,7 @@
 namespace doxxer::firmware::acpi {
 constexpr usize kMaximumIoApics = 4;
 constexpr usize kMaximumOverrides = 16;
+constexpr usize kMaximumIommus = 8;
 
 struct IoApic {
     u8 id;
@@ -21,6 +22,13 @@ struct InterruptOverride {
     bool level_triggered;
 };
 
+struct Iommu {
+    u64 register_address;
+    u16 pci_segment;
+    bool include_all;
+    u16 scope_count;
+};
+
 struct Topology {
     u64 local_apic_address;
     u64 hpet_address;
@@ -31,6 +39,12 @@ struct Topology {
     usize io_apic_count;
     InterruptOverride overrides[kMaximumOverrides];
     usize override_count;
+    u8 dma_address_width;
+    bool dma_interrupt_remapping;
+    Iommu iommus[kMaximumIommus];
+    usize iommu_count;
+    u32 pci_functions;
+    u32 dma_covered_functions;
 };
 
 bool initialize(const volatile limine_rsdp_response* response);

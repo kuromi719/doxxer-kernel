@@ -9,6 +9,7 @@ if (-not (Test-Path -LiteralPath $qemu)) { throw 'QEMU is not installed in the e
 $common = @(
     '-machine','q35','-m','512M',
     '-drive',"if=pflash,format=raw,readonly=on,file=$firmware",
+    '-device','intel-iommu,intremap=off',
     '-serial','stdio','-no-reboot'
 )
 if ($Media -eq 'disk') {
