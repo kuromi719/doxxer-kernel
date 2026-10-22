@@ -10,6 +10,7 @@ enum class ObjectType : u16 {
     address_space = 3,
     task = 4,
     event = 5,
+    process = 6,
 };
 
 enum class Right : u32 {

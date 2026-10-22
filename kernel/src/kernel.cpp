@@ -12,6 +12,7 @@
 #include <doxxer/memory/virtual.hpp>
 #include <doxxer/panic.hpp>
 #include <doxxer/platform.hpp>
+#include <doxxer/process/process.hpp>
 #include <doxxer/scheduler/scheduler.hpp>
 #include <doxxer/security/capability.hpp>
 #include <doxxer/sync/event.hpp>
@@ -84,6 +85,20 @@ namespace {
     log::write_decimal(event_stats.successful_waits);
     log::write(" WAITS\n");
     log::success("CAPABILITY EVENTS ONLINE");
+
+    if (!process::initialize() || !process::self_test()) {
+        log::write("[ERROR] PROCESS SELF-TEST STAGE: ");
+        log::write_decimal(process::failure_code());
+        log::write("\n");
+        panic("PROCESS CONTAINER SELF-TEST FAILED");
+    }
+    const process::Statistics process_stats = process::statistics();
+    log::write("[INFO] PROCESS LIFECYCLE: ");
+    log::write_decimal(process_stats.created_processes);
+    log::write(" CREATED / ");
+    log::write_decimal(process_stats.destroyed_processes);
+    log::write(" DESTROYED\n");
+    log::success("ISOLATED PROCESS CONTAINERS ONLINE");
 
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");

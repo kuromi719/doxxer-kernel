@@ -70,7 +70,7 @@ bool rights_valid(Rights value, bool allow_none = false) {
 }
 
 bool type_valid(ObjectType type) {
-    return type >= ObjectType::kernel_service && type <= ObjectType::event;
+    return type >= ObjectType::kernel_service && type <= ObjectType::process;
 }
 
 u32 next_generation(u32 generation) {
