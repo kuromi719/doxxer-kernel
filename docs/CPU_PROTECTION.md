@@ -9,8 +9,9 @@ I/O by placing its bitmap beyond the descriptor limit and records the future
 ring-3 transition stack in `RSP0`.
 
 The IDT owns all 256 vectors. Assembly stubs normalize hardware and synthetic
-error codes, preserve every general-purpose register, clear the direction flag,
-and pass a stable `ExceptionFrame` to C++. Interrupt gates keep maskable
+error codes, preserve every general-purpose register, clear AC and the direction flag,
+and pass a stable `ExceptionFrame` to C++. Clearing AC restores SMAP enforcement before
+privileged C++ executes. Interrupt gates keep maskable
 interrupts disabled while privileged exception state is inspected.
 
 ## Guarded stacks

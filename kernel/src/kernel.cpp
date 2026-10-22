@@ -1,4 +1,5 @@
 #include <doxxer/arch/x86_64/apic.hpp>
+#include <doxxer/arch/x86_64/hardening.hpp>
 #include <doxxer/arch/x86_64/iommu.hpp>
 #include <doxxer/arch/x86_64/protection.hpp>
 #include <doxxer/arch/x86_64/serial.hpp>
@@ -255,6 +256,12 @@ namespace {
         log::write("\n");
         panic("SMP IPI SELF-TEST FAILED");
     }
+    const arch::x86_64::hardening::Statistics all_cpu_hardening =
+        arch::x86_64::hardening::statistics();
+    log::write("[INFO] HARDENED PROCESSORS VERIFIED: ");
+    log::write_decimal(all_cpu_hardening.hardened_processors);
+    log::write("\n");
+    log::success("ALL CPU SECURITY STATE VERIFIED");
     log::success("SMP IPI SELF-TEST PASSED");
     if (!scheduler::initialize()) {
         log::write("[ERROR] SCHEDULER FAILURE STAGE: ");
@@ -385,6 +392,15 @@ extern "C" [[noreturn]] void kernel_main() {
     if (!arch::x86_64::protection::self_test()) {
         panic("CPU PROTECTION SELF-TEST FAILED");
     }
+    const arch::x86_64::hardening::Statistics hardening_stats =
+        arch::x86_64::hardening::statistics();
+    log::write("[INFO] CPU HARDENING: WP/NX/SMEP/SMAP/UMIP / CORES: ");
+    log::write_decimal(hardening_stats.hardened_processors);
+    log::write("\n");
+    log::success("CPU PRIVILEGE BOUNDARIES LOCKED");
+    log::success("KERNEL ELF PERMISSIONS VERIFIED");
+    log::success("SMAP ENFORCEMENT PROBED");
+    log::success("SMEP ENFORCEMENT PROBED");
     log::success("SUPERVISOR STACK WINDOWS ISOLATED");
     log::success("EXCEPTION AND GUARD SELF-TEST PASSED");
     arch::x86_64::protection::enter_kernel_stack(protected_kernel_main);

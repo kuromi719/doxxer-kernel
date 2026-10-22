@@ -16,7 +16,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
     Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $errorLog -ErrorAction SilentlyContinue
     $args = @(
-        '-machine','q35','-smp',"$Processors",'-m',$Memory,'-display','none','-monitor','none',
+        '-machine','q35','-cpu','max','-smp',"$Processors",'-m',$Memory,'-display','none','-monitor','none',
         '-drive',"if=pflash,format=raw,readonly=on,file=$firmware",
         '-device','intel-iommu,intremap=off',
         '-serial',"file:$log",'-no-reboot',
@@ -54,6 +54,10 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] SEALED SHADOW PAGE LEDGER ONLINE',
         '[OK] VMM ONLINE',
         '[OK] GDT TSS IDT ONLINE',
+        '[OK] CPU PRIVILEGE BOUNDARIES LOCKED',
+        '[OK] KERNEL ELF PERMISSIONS VERIFIED',
+        '[OK] SMAP ENFORCEMENT PROBED',
+        '[OK] SMEP ENFORCEMENT PROBED',
         '[OK] SUPERVISOR STACK WINDOWS ISOLATED',
         '[OK] EXCEPTION AND GUARD SELF-TEST PASSED',
         '[OK] GUARDED KERNEL STACK ACTIVE',
@@ -73,6 +77,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] LOCAL APIC ONLINE',
         '[OK] IOAPIC MASKED',
         '[OK] PER-CPU RUNTIME ONLINE',
+        '[OK] ALL CPU SECURITY STATE VERIFIED',
         '[OK] SMP IPI SELF-TEST PASSED',
         '[OK] PER-CPU SCHEDULER ONLINE',
         '[OK] CROSS-CPU TASK SELF-TEST PASSED',

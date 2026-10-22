@@ -1,6 +1,7 @@
 #include <doxxer/arch/x86_64/smp.hpp>
 
 #include <doxxer/arch/x86_64/apic.hpp>
+#include <doxxer/arch/x86_64/hardening.hpp>
 #include <doxxer/arch/x86_64/interrupts.hpp>
 #include <doxxer/arch/x86_64/protection.hpp>
 #include <doxxer/memory/physical.hpp>
@@ -187,6 +188,10 @@ void probe_handler(interrupts::ExceptionFrame&) {
 [[noreturn]] void secondary_main(void* argument) {
     auto* cpu = static_cast<CpuState*>(argument);
     install_descriptors(*cpu);
+    if (!hardening::initialize_secondary_processor()) {
+        __atomic_store_n(&cpu->status, static_cast<u32>(CpuStatus::failed), __ATOMIC_RELEASE);
+        halt_cpu();
+    }
     write_gs_base(cpu);
     if (!apic::initialize_secondary(cpu->apic_id)) {
         __atomic_store_n(&cpu->status, static_cast<u32>(CpuStatus::failed), __ATOMIC_RELEASE);
@@ -313,7 +318,8 @@ bool self_test() {
     }
     CpuState* bsp = current_cpu();
     if (bsp == nullptr || bsp->self != bsp || bsp->index >= discovered_processors ||
-        bsp->apic_id != apic::current_id()) {
+        bsp->apic_id != apic::current_id() || !hardening::verify_current_processor() ||
+        hardening::statistics().hardened_processors != discovered_processors) {
         last_failure = 12;
         return false;
     }

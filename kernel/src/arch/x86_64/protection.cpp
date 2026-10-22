@@ -1,5 +1,6 @@
 #include <doxxer/arch/x86_64/protection.hpp>
 
+#include <doxxer/arch/x86_64/hardening.hpp>
 #include <doxxer/arch/x86_64/interrupts.hpp>
 #include <doxxer/memory/physical.hpp>
 #include <doxxer/memory/virtual.hpp>
@@ -9,6 +10,16 @@ doxxer_run_on_stack(doxxer::u64 stack_top, doxxer::arch::x86_64::protection::Ker
 extern "C" [[noreturn]] void
 doxxer_run_on_cpu_stack(doxxer::u64 root_physical, doxxer::u64 stack_top,
                         doxxer::arch::x86_64::protection::CpuEntry entry, void* argument);
+extern "C" char __requests_start[];
+extern "C" char __requests_end[];
+extern "C" char __text_start[];
+extern "C" char __text_end[];
+extern "C" char __rodata_start[];
+extern "C" char __rodata_end[];
+extern "C" char __data_start[];
+extern "C" char __data_end[];
+extern "C" char __bss_start[];
+extern "C" char __bss_end[];
 
 namespace doxxer::arch::x86_64::protection {
 namespace {
@@ -174,6 +185,85 @@ bool descriptor_state_valid() {
     return code_selector == 0x08 && stack_selector == 0x10 && task_selector == kTaskStateSelector;
 }
 
+bool region_permissions_valid(const char* start, const char* end, bool writable,
+                              bool executable) {
+    const u64 first = reinterpret_cast<u64>(start) & ~(kPageSize - 1);
+    const u64 limit = reinterpret_cast<u64>(end);
+    if (first == 0 || limit <= first) {
+        return false;
+    }
+    for (u64 address = first; address < limit; address += kPageSize) {
+        memory::virtual_memory::Mapping mapping{};
+        if (!memory::virtual_memory::query(kernel_space, address, mapping) ||
+            memory::virtual_memory::has_flag(mapping.flags, MapFlags::user) ||
+            memory::virtual_memory::has_flag(mapping.flags, MapFlags::write) != writable ||
+            memory::virtual_memory::has_flag(mapping.flags, MapFlags::execute) != executable) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool kernel_image_permissions_valid() {
+    return region_permissions_valid(__requests_start, __requests_end, true, false) &&
+           region_permissions_valid(__text_start, __text_end, false, true) &&
+           region_permissions_valid(__rodata_start, __rodata_end, false, false) &&
+           region_permissions_valid(__data_start, __data_end, true, false) &&
+           region_permissions_valid(__bss_start, __bss_end, true, false);
+}
+
+bool smap_enforcement_valid() {
+    constexpr u64 kProbeAddress = 0x0000'6000'0000'0000ULL;
+    u64 physical_address = 0;
+    if (!memory::physical::allocate_page(physical_address,
+                                         memory::physical::PageOwner::user_data)) {
+        return false;
+    }
+    bool mapped = memory::virtual_memory::map(kernel_space, kProbeAddress, physical_address,
+                                               MapFlags::user | MapFlags::write);
+    bool valid = mapped && interrupts::probe_page_fault(
+                               kProbeAddress, true, exception_stack.virtual_base + kPageSize,
+                               exception_stack.top());
+    if (mapped && !memory::virtual_memory::unmap(kernel_space, kProbeAddress)) {
+        valid = false;
+    }
+    if (!memory::physical::free_page(physical_address,
+                                     memory::physical::PageOwner::user_data)) {
+        valid = false;
+    }
+    return valid;
+}
+
+bool smep_enforcement_valid() {
+    constexpr u64 kProbeAddress = 0x0000'6100'0000'0000ULL;
+    u64 physical_address = 0;
+    if (!memory::physical::allocate_page(physical_address,
+                                         memory::physical::PageOwner::user_image)) {
+        return false;
+    }
+    auto* code = static_cast<u8*>(memory::physical::direct_map_owned(
+        physical_address, memory::physical::PageOwner::user_image));
+    if (code == nullptr) {
+        (void)memory::physical::free_page(physical_address,
+                                          memory::physical::PageOwner::user_image);
+        return false;
+    }
+    code[0] = 0xC3;
+    bool mapped = memory::virtual_memory::map(kernel_space, kProbeAddress, physical_address,
+                                               MapFlags::user | MapFlags::execute);
+    bool valid = mapped && interrupts::probe_execution_fault(
+                               kProbeAddress, exception_stack.virtual_base + kPageSize,
+                               exception_stack.top());
+    if (mapped && !memory::virtual_memory::unmap(kernel_space, kProbeAddress)) {
+        valid = false;
+    }
+    if (!memory::physical::free_page(physical_address,
+                                     memory::physical::PageOwner::user_image)) {
+        valid = false;
+    }
+    return valid;
+}
+
 bool supervisor_windows_valid() {
     constexpr u64 kDynamicProbe = 0x0000'7200'FF00'0000ULL;
     AddressSpace process_space{};
@@ -238,6 +328,9 @@ bool initialize() {
     }
     install_gdt();
     interrupts::initialize();
+    if (!hardening::initialize_boot_processor()) {
+        return false;
+    }
     initialized = true;
     return true;
 }
@@ -245,7 +338,9 @@ bool initialize() {
 bool self_test() {
     if (!initialized || !stack_layout_valid(kernel_stack) ||
         !stack_layout_valid(exception_stack) || !stack_layout_valid(emergency_stack) ||
-        !descriptor_state_valid()) {
+        !descriptor_state_valid() || !hardening::verify_current_processor() ||
+        !kernel_image_permissions_valid() || !smap_enforcement_valid() ||
+        !smep_enforcement_valid()) {
         return false;
     }
     if (!supervisor_windows_valid()) {

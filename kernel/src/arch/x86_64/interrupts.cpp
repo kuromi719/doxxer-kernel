@@ -5,6 +5,7 @@
 
 extern "C" void* doxxer_isr_table[256];
 extern "C" doxxer::u64 doxxer_guard_page_probe(doxxer::u64 address);
+extern "C" doxxer::u64 doxxer_execution_probe(doxxer::u64 address);
 extern "C" doxxer::u64 doxxer_fault_resume_rip = 0;
 
 namespace doxxer::arch::x86_64::interrupts {
@@ -38,6 +39,9 @@ volatile bool breakpoint_probe_active = false;
 volatile bool breakpoint_seen = false;
 volatile bool page_fault_probe_active = false;
 volatile bool page_fault_seen = false;
+volatile bool expected_fault_present = false;
+volatile u64 expected_fault_error_mask = 1;
+volatile u64 expected_fault_error_value = 0;
 volatile u64 expected_fault_address = 0;
 volatile u64 expected_stack_bottom = 0;
 volatile u64 expected_stack_top = 0;
@@ -191,12 +195,58 @@ bool self_test(u64 guard_address, u64 exception_stack_bottom, u64 exception_stac
         return false;
     }
 
-    expected_fault_address = guard_address;
+    return probe_page_fault(guard_address, false, exception_stack_bottom, exception_stack_top);
+}
+
+bool probe_page_fault(u64 fault_address, bool present, u64 exception_stack_bottom,
+                      u64 exception_stack_top) {
+    if (fault_address == 0 || exception_stack_bottom >= exception_stack_top ||
+        page_fault_probe_active) {
+        return false;
+    }
+    expected_fault_address = fault_address;
+    expected_fault_present = present;
+    expected_fault_error_mask = 1;
+    expected_fault_error_value = present ? 1 : 0;
+    expected_stack_bottom = exception_stack_bottom;
+    expected_stack_top = exception_stack_top;
+    frames_used_exception_stack = true;
     page_fault_seen = false;
     page_fault_probe_active = true;
-    const u64 recovered = doxxer_guard_page_probe(guard_address);
+    const u64 recovered = doxxer_guard_page_probe(fault_address);
     page_fault_probe_active = false;
+    doxxer_fault_resume_rip = 0;
     expected_fault_address = 0;
+    expected_fault_present = false;
+    expected_fault_error_mask = 1;
+    expected_fault_error_value = 0;
+    expected_stack_bottom = 0;
+    expected_stack_top = 0;
+    return recovered == 1 && page_fault_seen && frames_used_exception_stack;
+}
+
+bool probe_execution_fault(u64 fault_address, u64 exception_stack_bottom,
+                           u64 exception_stack_top) {
+    if (fault_address == 0 || exception_stack_bottom >= exception_stack_top ||
+        page_fault_probe_active) {
+        return false;
+    }
+    expected_fault_address = fault_address;
+    expected_fault_present = true;
+    expected_fault_error_mask = 0x11;
+    expected_fault_error_value = 0x11;
+    expected_stack_bottom = exception_stack_bottom;
+    expected_stack_top = exception_stack_top;
+    frames_used_exception_stack = true;
+    page_fault_seen = false;
+    page_fault_probe_active = true;
+    const u64 recovered = doxxer_execution_probe(fault_address);
+    page_fault_probe_active = false;
+    doxxer_fault_resume_rip = 0;
+    expected_fault_address = 0;
+    expected_fault_present = false;
+    expected_fault_error_mask = 1;
+    expected_fault_error_value = 0;
     expected_stack_bottom = 0;
     expected_stack_top = 0;
     return recovered == 1 && page_fault_seen && frames_used_exception_stack;
@@ -236,7 +286,9 @@ void dispatch(ExceptionFrame* frame) {
         return;
     }
     if (page_fault_probe_active && frame->vector == 14 && read_cr2() == expected_fault_address &&
-        (frame->error_code & 1U) == 0 && doxxer_fault_resume_rip != 0) {
+        ((frame->error_code & 1U) != 0) == expected_fault_present &&
+        (frame->error_code & expected_fault_error_mask) == expected_fault_error_value &&
+        doxxer_fault_resume_rip != 0) {
         page_fault_seen = true;
         frame->rip = doxxer_fault_resume_rip;
         return;

@@ -15,26 +15,34 @@ SECTIONS
     . = 0xffffffff80000000;
 
     .limine_requests : ALIGN(8) {
+        __requests_start = .;
         KEEP(*(.limine_requests_start))
         KEEP(*(.limine_requests))
         KEEP(*(.limine_requests_end))
+        __requests_end = .;
     } :requests
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
     .text : {
+        __text_start = .;
         *(.text .text.*)
+        __text_end = .;
     } :text
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
     .rodata : {
+        __rodata_start = .;
         *(.rodata .rodata.*)
         *(.note.gnu.build-id)
+        __rodata_end = .;
     } :rodata
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
     .data : {
+        __data_start = .;
         *(.data .data.*)
         *(.data.rel.ro .data.rel.ro.*)
+        __data_end = .;
     } :data
 
     .init_array : {
@@ -45,8 +53,10 @@ SECTIONS
     } :data
 
     .bss : {
+        __bss_start = .;
         *(.bss .bss.*)
         *(COMMON)
+        __bss_end = .;
     } :data
 
     ASSERT(SIZEOF(.init_array) == 0, "Global constructors are not supported")

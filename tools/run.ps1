@@ -7,7 +7,7 @@ $firmware = 'C:\Program Files\qemu\share\edk2-x86_64-code.fd'
 if (-not (Test-Path -LiteralPath $qemu)) { throw 'QEMU is not installed in the expected location.' }
 
 $common = @(
-    '-machine','q35','-m','512M',
+    '-machine','q35','-cpu','max','-m','512M',
     '-drive',"if=pflash,format=raw,readonly=on,file=$firmware",
     '-device','intel-iommu,intremap=off',
     '-serial','stdio','-no-reboot'

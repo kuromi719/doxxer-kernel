@@ -38,6 +38,7 @@ doxxer_isr_common:
     pushq %r13
     pushq %r14
     pushq %r15
+    clac
     cld
     movq %rsp, %rdi
     call doxxer_exception_dispatch
@@ -68,6 +69,19 @@ doxxer_guard_page_probe:
     xorl %eax, %eax
     retq
 .Lguard_recovered:
+    movl $1, %eax
+    retq
+
+.global doxxer_execution_probe
+.type doxxer_execution_probe, @function
+doxxer_execution_probe:
+    leaq .Lexecution_recovered(%rip), %rax
+    movq %rax, doxxer_fault_resume_rip(%rip)
+    callq *%rdi
+    xorl %eax, %eax
+    retq
+.Lexecution_recovered:
+    addq $8, %rsp
     movl $1, %eax
     retq
 
