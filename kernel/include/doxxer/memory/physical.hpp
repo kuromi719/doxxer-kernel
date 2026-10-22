@@ -27,6 +27,8 @@ enum class PageOwner : u8 {
     user_image,
     user_stack,
     user_data,
+    secret_working,
+    shadow_region,
     iommu,
     test,
 };

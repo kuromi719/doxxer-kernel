@@ -13,6 +13,7 @@
 #include <doxxer/log.hpp>
 #include <doxxer/memory/heap.hpp>
 #include <doxxer/memory/physical.hpp>
+#include <doxxer/memory/shadow_regions.hpp>
 #include <doxxer/memory/user_copy.hpp>
 #include <doxxer/memory/virtual.hpp>
 #include <doxxer/panic.hpp>
@@ -35,6 +36,23 @@ namespace {
         panic("KERNEL STACK TRANSITION FAILED");
     }
     log::success("GUARDED KERNEL STACK ACTIVE");
+
+    if (!memory::shadow_regions::initialize() || !memory::shadow_regions::self_test()) {
+        log::write("[ERROR] SHADOW REGION SELF-TEST STAGE: ");
+        log::write_decimal(memory::shadow_regions::failure_code());
+        log::write("\n");
+        panic("SHADOW MEMORY REGION INITIALIZATION FAILED");
+    }
+    const memory::shadow_regions::Statistics shadow_stats =
+        memory::shadow_regions::statistics();
+    log::write("[INFO] SHADOW REGIONS: ");
+    log::write_decimal(shadow_stats.opened_regions);
+    log::write(" OPENED / ");
+    log::write_decimal(shadow_stats.rejected_accesses);
+    log::write(" ACCESS REJECTIONS / CAPACITY ");
+    log::write_decimal(shadow_stats.capacity);
+    log::write("\n");
+    log::success("GUARDED SHADOW MEMORY REGIONS ONLINE");
 
     if (!memory::heap::initialize()) {
         panic("KERNEL HEAP INITIALIZATION FAILED");
@@ -294,6 +312,13 @@ namespace {
     log::write_decimal(syscall_stack_top - syscall_stack_bottom);
     log::write("\n");
     log::success("PER-CPU GUARDED SYSCALL STACKS ONLINE");
+    if (!arch::x86_64::ring3::initialize_runtime()) {
+        log::write("[ERROR] ALL-CPU SYSCALL INITIALIZATION STAGE: ");
+        log::write_decimal(arch::x86_64::ring3::failure_code());
+        log::write("\n");
+        panic("ALL-CPU SYSCALL INITIALIZATION FAILED");
+    }
+    log::success("ALL-CPU SYSCALL MSRS VERIFIED");
     if (!arch::x86_64::ring3::runtime_self_test()) {
         log::write("[ERROR] RUNTIME SYSCALL SELF-TEST STAGE: ");
         log::write_decimal(arch::x86_64::ring3::failure_code());

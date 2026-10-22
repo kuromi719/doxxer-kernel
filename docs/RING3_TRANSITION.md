@@ -41,6 +41,7 @@ User code then performs a second syscall, proving that the return path really re
 The entry path deliberately uses `IRETQ` rather than the more fragile `SYSRETQ` fast path. Invalid
 canonical state, forbidden privilege flags, a missing CPU-local process binding, or an invalid
 executable/stack mapping fail closed before return. The boot probe restores all modified MSRs and
-requires exact page/reference accounting. Remaining runtime work includes scheduler-owned binding
-for arbitrary user threads, user-origin interrupt/exception delivery, preemption rules, and
-installing the entry MSRs on every application processor.
+requires exact page/reference accounting. A serialized rendezvous installs and reads back the
+production `EFER.SCE`, `STAR`, `LSTAR`, and `FMASK` state on every online processor before this
+probe runs. Remaining runtime work includes scheduler-owned binding for arbitrary user threads,
+user-origin interrupt/exception delivery, and preemption rules.

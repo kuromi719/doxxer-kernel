@@ -30,3 +30,7 @@ always ciphertext. Transparent protection against physical RAM probing requires 
 memory encryption (for example AMD SME or Intel TME), platform firmware enablement, and later
 attestation. Doxxer will fail closed for workloads that request that stronger policy when the
 hardware capability is unavailable.
+
+After the protected kernel address space is active, authenticated records can be materialized in
+the guarded, poisoned working sets described in
+[`SHADOW_MEMORY_REGIONS.md`](SHADOW_MEMORY_REGIONS.md), rather than arbitrary long-lived buffers.

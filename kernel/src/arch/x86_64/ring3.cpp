@@ -66,6 +66,8 @@ u64 runtime_probe_calls = 0;
 u64 runtime_first_rip = 0;
 u64 runtime_first_rsp = 0;
 u64 runtime_first_rflags = 0;
+u32 runtime_cpu_installs = 0;
+bool runtime_initialized = false;
 
 u64 read_msr(u32 index) {
     u32 low = 0;
@@ -125,6 +127,26 @@ bool valid_runtime_return(process::AddressSpaceLease& lease, u64 user_rip, u64 u
                                               memory::user_copy::Access::execute) &&
            memory::user_copy::validate_range(*lease.space, user_rsp - 1, 1,
                                               memory::user_copy::Access::read);
+}
+
+bool install_runtime_cpu() {
+    if (!syscall_supported() || read_msr(kMsrKernelGsBase) != 0) {
+        return false;
+    }
+    const u64 efer = read_msr(kMsrEfer);
+    write_msr(kMsrStar, kKernelStar);
+    write_msr(kMsrLstar, reinterpret_cast<u64>(&doxxer_runtime_syscall_entry));
+    write_msr(kMsrFmask, kMaskedUserFlags);
+    write_msr(kMsrEfer, efer | kEferSyscallEnable);
+    const bool valid = (read_msr(kMsrEfer) & kEferSyscallEnable) != 0 &&
+                       read_msr(kMsrStar) == kKernelStar &&
+                       read_msr(kMsrLstar) == reinterpret_cast<u64>(&doxxer_runtime_syscall_entry) &&
+                       read_msr(kMsrFmask) == kMaskedUserFlags &&
+                       read_msr(kMsrKernelGsBase) == 0;
+    if (valid) {
+        __atomic_add_fetch(&runtime_cpu_installs, 1U, __ATOMIC_RELAXED);
+    }
+    return valid;
 }
 
 u64 read_cr3() {
@@ -386,6 +408,22 @@ cleanup:
     return last_failure == 0;
 }
 
+bool initialize_runtime() {
+    if (runtime_initialized || !syscall_supported() ||
+        arch::x86_64::smp::processor_count() == 0) {
+        last_failure = 100;
+        return false;
+    }
+    runtime_cpu_installs = 0;
+    if (!arch::x86_64::smp::run_on_all(install_runtime_cpu) ||
+        runtime_cpu_installs != arch::x86_64::smp::processor_count()) {
+        last_failure = 100;
+        return false;
+    }
+    runtime_initialized = true;
+    return true;
+}
+
 bool runtime_self_test() {
     last_failure = 0;
     runtime_probe_calls = 0;
@@ -396,7 +434,8 @@ bool runtime_self_test() {
     doxxer_runtime_probe_kernel_rsp = 0;
     doxxer_runtime_probe_kernel_cr3 = 0;
     doxxer_runtime_probe_resume = 0;
-    if (!syscall_supported() || arch::x86_64::smp::current_index() == 0xFFFF'FFFFU) {
+    if (!runtime_initialized || !syscall_supported() ||
+        arch::x86_64::smp::current_index() == 0xFFFF'FFFFU) {
         last_failure = 101;
         return false;
     }

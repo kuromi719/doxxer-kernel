@@ -7,8 +7,9 @@ boot-secret-derived integrity seal. Allocation, mapping, and release paths valid
 under the allocator lock and fail closed on a mismatch.
 
 Current owner classes separate page tables, heap pages, supervisor stacks, user images, user stacks,
-user data, IOMMU tables, and test pages. Callers must provide the expected owner when mapping or
-freeing a page. This blocks cross-subsystem confused-free and direct-map mistakes. User mappings are
+user data, ephemeral secret-working pages, read-only shadow-region metadata, IOMMU tables, and test
+pages. Callers must provide the expected owner when mapping or freeing a page. This blocks
+cross-subsystem confused-free and direct-map mistakes. User mappings are
 accepted only for user-owned pages; executable user mappings are accepted only for image pages.
 Kernel heap, page-table, IOMMU, and stack pages therefore cannot be exposed through the user mapping
 API. User-copy operations likewise reject physical pages outside the user-owner set.
@@ -45,3 +46,6 @@ page-table editing. See `PAGE_TABLE_LIFETIMES.md` for the current graph invarian
 should replace those mappings with Doxxer-owned bootstrap tables and dedicated editing windows, add
 guard pages to more object classes, and enable hardware RAM encryption and measured boot on
 platforms that provide them.
+
+Ephemeral plaintext secret use is additionally constrained by guarded shadow regions documented in
+[`SHADOW_MEMORY_REGIONS.md`](SHADOW_MEMORY_REGIONS.md).

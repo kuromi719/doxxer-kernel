@@ -20,6 +20,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Boot-time breakpoint, IST-routing, and real guard-page fault recovery tests
 - Hardened slab/page kernel heap with keyed canaries, quarantine, and secure wiping
 - Entropy-derived ChaCha20 + HMAC-SHA-256 sealed-memory vault for idle secrets
+- Ephemeral guarded shadow-memory regions for authenticated secret working sets
 - Checksummed RSDP/XSDT, MADT, and HPET discovery with bounded ACPI parsing
 - Explicit uncached MMIO mappings for Local APIC, I/O APIC, and HPET registers
 - Legacy PIC shutdown, fail-closed I/O APIC masking, and calibrated periodic APIC timer
@@ -28,6 +29,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Cross-CPU fixed IPI delivery test with bounded HPET startup and response deadlines
 - Dedicated per-CPU 32 KiB NX syscall stacks with dual guard pages and integrity canaries
 - SWAPGS syscall entry with process-bound dispatch and validated fixed-selector IRETQ return
+- Deadline-bounded SMP rendezvous installation and verification of syscall MSRs on every CPU
 - Bounded per-CPU kernel task queues with isolated guarded stacks and generation-safe handles
 - IPI wakeups, idle `hlt`, explicit task lifecycle, stack wiping, and cross-CPU execution tests
 - Capability-first kernel authority model with attenuation, revocation ancestry, typed objects, and pinned leases
@@ -118,6 +120,7 @@ See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
 [`docs/CPU_PROTECTION.md`](docs/CPU_PROTECTION.md) for descriptor, exception, and stack design,
 [`docs/HEAP.md`](docs/HEAP.md) for dynamic allocation invariants,
 [`docs/SEALED_MEMORY.md`](docs/SEALED_MEMORY.md) for authenticated encryption of idle secrets,
+[`docs/SHADOW_MEMORY_REGIONS.md`](docs/SHADOW_MEMORY_REGIONS.md) for guarded secret working sets,
 [`docs/INTERRUPTS.md`](docs/INTERRUPTS.md) for ACPI and interrupt-controller design,
 [`docs/SMP.md`](docs/SMP.md) for multiprocessor and CPU-local invariants,
 [`docs/SCHEDULER.md`](docs/SCHEDULER.md) for kernel task dispatch and isolation,

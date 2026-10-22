@@ -153,6 +153,7 @@ constexpr bool allocatable_owner(PageOwner owner) {
     return owner == PageOwner::page_table || owner == PageOwner::kernel_heap ||
            owner == PageOwner::kernel_stack || owner == PageOwner::user_image ||
            owner == PageOwner::user_stack || owner == PageOwner::user_data ||
+           owner == PageOwner::secret_working || owner == PageOwner::shadow_region ||
            owner == PageOwner::iommu || owner == PageOwner::test;
 }
 

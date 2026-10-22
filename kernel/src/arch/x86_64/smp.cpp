@@ -25,6 +25,7 @@ constexpr u64 kStartupTimeoutMicroseconds = 1'000'000;
 constexpr u64 kIpiTimeoutMicroseconds = 250'000;
 constexpr u16 kTaskStateSelector = 0x28;
 constexpr u8 kProbeVector = 0xE1;
+constexpr u8 kRendezvousVector = 0xE3;
 constexpr u32 kGsBaseMsr = 0xC000'0101U;
 constexpr u32 kKernelGsBaseMsr = 0xC000'0102U;
 constexpr u64 kSyscallStackCanary = 0x4458'5359'5343'414EULL;
@@ -82,6 +83,8 @@ struct alignas(64) CpuState {
     u64 syscall_stack_top;
     void* syscall_context;
     u64 syscall_user_rsp;
+    u32 rendezvous_generation;
+    u32 rendezvous_result;
     alignas(16) u64 gdt[7];
     alignas(16) TaskStateSegment tss;
 };
@@ -97,6 +100,9 @@ u32 discovered_processors = 0;
 u32 last_failure = 0;
 bool initialized = false;
 WorkerEntry worker_entry = nullptr;
+RendezvousEntry rendezvous_entry = nullptr;
+u32 rendezvous_generation = 0;
+sync::SpinLock rendezvous_lock{};
 
 void write_gs_base(CpuState* cpu) {
     const u64 value = reinterpret_cast<u64>(cpu);
@@ -240,6 +246,19 @@ void probe_handler(interrupts::ExceptionFrame&) {
     apic::eoi();
 }
 
+void rendezvous_handler(interrupts::ExceptionFrame&) {
+    CpuState* cpu = current_cpu();
+    RendezvousEntry entry = __atomic_load_n(&rendezvous_entry, __ATOMIC_ACQUIRE);
+    const u32 generation = __atomic_load_n(&rendezvous_generation, __ATOMIC_ACQUIRE);
+    if (cpu != nullptr && cpu->self == cpu && cpu->index < discovered_processors &&
+        entry != nullptr && generation != 0) {
+        const bool result = entry();
+        __atomic_store_n(&cpu->rendezvous_result, result ? 1U : 0U, __ATOMIC_RELAXED);
+        __atomic_store_n(&cpu->rendezvous_generation, generation, __ATOMIC_RELEASE);
+    }
+    apic::eoi();
+}
+
 [[noreturn]] void secondary_main(void* argument) {
     auto* cpu = static_cast<CpuState*>(argument);
     install_descriptors(*cpu);
@@ -321,6 +340,8 @@ bool initialize(const volatile limine_mp_response* response,
         cpus[index].processor_id = info->processor_id;
         cpus[index].apic_id = info->lapic_id;
         cpus[index].ipi_probes = 0;
+        cpus[index].rendezvous_generation = 0;
+        cpus[index].rendezvous_result = 0;
         if (info->lapic_id == response->bsp_lapic_id) {
             bsp_found = true;
             bsp = &cpus[index];
@@ -338,7 +359,8 @@ bool initialize(const volatile limine_mp_response* response,
         }
         initialize_syscall_stack(cpus[index]);
     }
-    if (!bsp_found || !interrupts::register_handler(kProbeVector, probe_handler)) {
+    if (!bsp_found || !interrupts::register_handler(kProbeVector, probe_handler) ||
+        !interrupts::register_handler(kRendezvousVector, rendezvous_handler)) {
         last_failure = 6;
         return false;
     }
@@ -510,6 +532,59 @@ bool unbind_syscall_context(void* context) {
     __atomic_store_n(&cpu->syscall_context, nullptr, __ATOMIC_RELEASE);
     cpu->syscall_user_rsp = 0;
     return syscall_stack_intact(*cpu);
+}
+
+bool run_on_all(RendezvousEntry entry) {
+    if (!initialized || entry == nullptr || discovered_processors == 0) {
+        return false;
+    }
+    sync::LockGuard guard(rendezvous_lock);
+    CpuState* bsp = current_cpu();
+    if (bsp == nullptr || bsp->self != bsp || bsp->index >= discovered_processors ||
+        __atomic_load_n(&rendezvous_entry, __ATOMIC_ACQUIRE) != nullptr) {
+        return false;
+    }
+    u32 generation = __atomic_add_fetch(&rendezvous_generation, 1U, __ATOMIC_ACQ_REL);
+    if (generation == 0) {
+        generation = __atomic_add_fetch(&rendezvous_generation, 1U, __ATOMIC_ACQ_REL);
+    }
+    for (u32 index = 0; index < discovered_processors; ++index) {
+        __atomic_store_n(&cpus[index].rendezvous_result, 0U, __ATOMIC_RELAXED);
+        __atomic_store_n(&cpus[index].rendezvous_generation, 0U, __ATOMIC_RELAXED);
+    }
+    __atomic_store_n(&rendezvous_entry, entry, __ATOMIC_RELEASE);
+    for (u32 index = 0; index < discovered_processors; ++index) {
+        if (&cpus[index] != bsp && !apic::send_ipi(cpus[index].apic_id, kRendezvousVector)) {
+            __atomic_store_n(&rendezvous_entry, nullptr, __ATOMIC_RELEASE);
+            return false;
+        }
+    }
+    const bool bsp_result = entry();
+    __atomic_store_n(&bsp->rendezvous_result, bsp_result ? 1U : 0U, __ATOMIC_RELAXED);
+    __atomic_store_n(&bsp->rendezvous_generation, generation, __ATOMIC_RELEASE);
+
+    const u64 start = apic::reference_counter();
+    for (;;) {
+        bool complete = true;
+        bool success = true;
+        for (u32 index = 0; index < discovered_processors; ++index) {
+            if (__atomic_load_n(&cpus[index].rendezvous_generation, __ATOMIC_ACQUIRE) !=
+                generation) {
+                complete = false;
+            } else if (__atomic_load_n(&cpus[index].rendezvous_result, __ATOMIC_RELAXED) == 0) {
+                success = false;
+            }
+        }
+        if (complete) {
+            __atomic_store_n(&rendezvous_entry, nullptr, __ATOMIC_RELEASE);
+            return success;
+        }
+        if (deadline_reached(start, kIpiTimeoutMicroseconds)) {
+            __atomic_store_n(&rendezvous_entry, nullptr, __ATOMIC_RELEASE);
+            return false;
+        }
+        asm volatile("pause");
+    }
 }
 
 bool install_worker_entry(WorkerEntry entry) {

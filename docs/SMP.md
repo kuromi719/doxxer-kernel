@@ -31,6 +31,11 @@ The `IA32_GS_BASE` MSR points at a cache-line-aligned CPU record and `IA32_KERNE
 
 CPU records and mappings are completed before the MP `goto_address` is published with release ordering. Secondary status transitions use release stores; the bootstrap processor observes them with acquire loads. Startup is successful only when every discovered processor reaches the online state before a one-second HPET deadline.
 
+A serialized, generation-tagged rendezvous IPI can run bounded CPU-local initialization on every
+online processor. Completion and success are recorded per CPU and must arrive before a 250 ms HPET
+deadline. The syscall layer uses this path to install and read back `EFER.SCE`, `STAR`, `LSTAR`, and
+`FMASK` on every processor before any persistent user execution is permitted.
+
 ## Cross-CPU test
 
 Vector `0xE1` is reserved as a kernel IPI probe. The bootstrap processor sends a fixed IPI to every secondary processor and requires each CPU-local acknowledgement counter to advance before a 250 ms HPET deadline. The handler validates CPU identity and the local syscall-stack canary before acknowledging, then performs only an atomic counter increment and Local APIC EOI. The bootstrap processor additionally walks every syscall-stack mapping and requires supervisor-only, writable, NX pages plus unmapped guards.
