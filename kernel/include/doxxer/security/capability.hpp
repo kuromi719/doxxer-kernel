@@ -9,6 +9,7 @@ enum class ObjectType : u16 {
     ipc_channel = 2,
     address_space = 3,
     task = 4,
+    event = 5,
 };
 
 enum class Right : u32 {

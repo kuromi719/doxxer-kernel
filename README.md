@@ -30,6 +30,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Capability-first kernel authority model with attenuation, revocation ancestry, typed objects, and pinned leases
 - Entropy-keyed 36-bit token authentication plus generational stale-handle rejection
 - Capability-gated bounded IPC channels with split send, receive, and administration endpoints
+- Manual- and auto-reset capability events with non-blocking, allocation-free wait semantics
 - W^X-compatible ELF segments and non-executable stack
 - Bootable GPT/FAT disk image and UEFI ISO
 - Automated disk and ISO smoke tests

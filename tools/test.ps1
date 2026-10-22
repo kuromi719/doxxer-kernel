@@ -57,6 +57,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] HARDENED HEAP ONLINE',
         '[OK] CAPABILITY SECURITY MODEL ONLINE',
         '[OK] CAPABILITY IPC ONLINE',
+        '[OK] CAPABILITY EVENTS ONLINE',
         '[OK] ACPI TABLES VALIDATED',
         '[OK] LOCAL APIC ONLINE',
         '[OK] IOAPIC MASKED',

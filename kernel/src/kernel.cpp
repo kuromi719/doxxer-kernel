@@ -14,6 +14,7 @@
 #include <doxxer/platform.hpp>
 #include <doxxer/scheduler/scheduler.hpp>
 #include <doxxer/security/capability.hpp>
+#include <doxxer/sync/event.hpp>
 
 namespace {
 [[noreturn]] void protected_kernel_main() {
@@ -69,6 +70,20 @@ namespace {
     log::write_decimal(ipc_stats.received_messages);
     log::write(" RECEIVED\n");
     log::success("CAPABILITY IPC ONLINE");
+
+    if (!sync::event::initialize() || !sync::event::self_test()) {
+        log::write("[ERROR] EVENT SELF-TEST STAGE: ");
+        log::write_decimal(sync::event::failure_code());
+        log::write("\n");
+        panic("CAPABILITY EVENT SELF-TEST FAILED");
+    }
+    const sync::event::Statistics event_stats = sync::event::statistics();
+    log::write("[INFO] EVENTS: ");
+    log::write_decimal(event_stats.signals);
+    log::write(" SIGNALS / ");
+    log::write_decimal(event_stats.successful_waits);
+    log::write(" WAITS\n");
+    log::success("CAPABILITY EVENTS ONLINE");
 
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");

@@ -68,7 +68,7 @@ bool rights_valid(Rights value, bool allow_none = false) {
 }
 
 bool type_valid(ObjectType type) {
-    return type >= ObjectType::kernel_service && type <= ObjectType::task;
+    return type >= ObjectType::kernel_service && type <= ObjectType::event;
 }
 
 u32 next_generation(u32 generation) {
