@@ -2,6 +2,7 @@
 #include <doxxer/boot/requests.hpp>
 #include <doxxer/graphics/framebuffer.hpp>
 #include <doxxer/log.hpp>
+#include <doxxer/memory/physical.hpp>
 #include <doxxer/panic.hpp>
 #include <doxxer/platform.hpp>
 
@@ -37,10 +38,26 @@ extern "C" [[noreturn]] void kernel_main() {
         log::write("\n");
     }
 
+    const volatile limine_memmap_response* memory_map = boot::memmap_request.response;
+    const volatile limine_hhdm_response* hhdm = boot::hhdm_request.response;
+    if (!memory::physical::initialize(memory_map, hhdm)) {
+        panic("PHYSICAL MEMORY MANAGER INITIALIZATION FAILED");
+    }
+    if (!memory::physical::self_test()) {
+        panic("PHYSICAL MEMORY MANAGER SELF-TEST FAILED");
+    }
+    const memory::physical::Statistics memory_stats = memory::physical::statistics();
+    log::write("[INFO] PMM FREE PAGES: ");
+    log::write_decimal(memory_stats.free_pages);
+    log::write(" / METADATA PAGES: ");
+    log::write_decimal(memory_stats.metadata_pages);
+    log::write("\n");
+    log::success("PMM ONLINE");
+
     const volatile limine_framebuffer_response* framebuffer_response =
         boot::framebuffer_request.response;
-    if (framebuffer_response == nullptr || framebuffer_response->framebuffers == nullptr
-        || framebuffer_response->framebuffer_count == 0) {
+    if (framebuffer_response == nullptr || framebuffer_response->framebuffers == nullptr ||
+        framebuffer_response->framebuffer_count == 0) {
         panic("FRAMEBUFFER UNAVAILABLE");
     }
 

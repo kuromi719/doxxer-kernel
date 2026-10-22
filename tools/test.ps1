@@ -10,13 +10,13 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 & (Join-Path $PSScriptRoot 'invoke-make.ps1') -Target clean
 & (Join-Path $PSScriptRoot 'invoke-make.ps1') -Target all -Arguments @('TEST_MODE=1')
 
-function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs) {
+function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory = '512M') {
     $log = Join-Path $logDir "$Name.log"
     $errorLog = Join-Path $logDir "$Name-qemu-error.log"
     Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $errorLog -ErrorAction SilentlyContinue
     $args = @(
-        '-machine','q35','-m','512M','-display','none','-monitor','none',
+        '-machine','q35','-m',$Memory,'-display','none','-monitor','none',
         '-drive',"if=pflash,format=raw,readonly=on,file=$firmware",
         '-serial',"file:$log",'-no-reboot',
         '-device','isa-debug-exit'
@@ -31,7 +31,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs) {
         throw "$Name produced no serial log (exit $($process.ExitCode)): $details"
     }
     $serial = Get-Content -LiteralPath $log -Raw
-    foreach ($marker in @('DOXXER_BOOT_START','[OK] SERIAL ONLINE','[OK] STACK GUARD SEEDED','[OK] FRAMEBUFFER ONLINE','DOXXER_BOOT_OK')) {
+    foreach ($marker in @('DOXXER_BOOT_START','[OK] SERIAL ONLINE','[OK] STACK GUARD SEEDED','[OK] PMM ONLINE','[OK] FRAMEBUFFER ONLINE','DOXXER_BOOT_OK')) {
         if (-not $serial.Contains($marker)) { throw "$Name missing marker '$marker'. See $log" }
     }
     if ($process.ExitCode -ne 33) { throw "$Name returned $($process.ExitCode), expected 33. See $log" }
@@ -40,3 +40,4 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs) {
 
 Invoke-SmokeTest 'disk' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')")
 Invoke-SmokeTest 'iso' @('-cdrom',(Join-Path $root 'dist\doxxer.iso'))
+Invoke-SmokeTest 'highmem' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')") '5G'
