@@ -28,8 +28,14 @@ struct ExceptionFrame {
     u64 ss;
 };
 
+using Handler = void (*)(ExceptionFrame& frame);
+
 void initialize();
 bool self_test(u64 guard_address, u64 exception_stack_bottom, u64 exception_stack_top);
+bool register_handler(u8 vector, Handler handler);
+void enable();
+void disable();
+bool enabled();
 }
 
 extern "C" void doxxer_exception_dispatch(doxxer::arch::x86_64::interrupts::ExceptionFrame* frame);

@@ -41,6 +41,12 @@ __attribute__((used, section(".limine_requests"))) volatile limine_hhdm_request 
     .response = nullptr,
 };
 
+__attribute__((used, section(".limine_requests"))) volatile limine_rsdp_request rsdp_request = {
+    .id = LIMINE_RSDP_REQUEST_ID,
+    .revision = 0,
+    .response = nullptr,
+};
+
 __attribute__((used, section(".limine_requests_end"))) volatile uint64_t requests_end_marker[] =
     LIMINE_REQUESTS_END_MARKER;
 }

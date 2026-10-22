@@ -33,6 +33,7 @@ static_assert(sizeof(IdtEntry) == 16);
 static_assert(sizeof(DescriptorTablePointer) == 10);
 
 alignas(16) IdtEntry idt[256]{};
+Handler handlers[256]{};
 volatile bool breakpoint_probe_active = false;
 volatile bool breakpoint_seen = false;
 volatile bool page_fault_probe_active = false;
@@ -197,6 +198,24 @@ bool self_test(u64 guard_address, u64 exception_stack_bottom, u64 exception_stac
     return recovered == 1 && page_fault_seen && frames_used_exception_stack;
 }
 
+bool register_handler(u8 vector, Handler handler) {
+    if (vector < 32 || handler == nullptr || handlers[vector] != nullptr || enabled()) {
+        return false;
+    }
+    handlers[vector] = handler;
+    return true;
+}
+
+void enable() { asm volatile("sti" : : : "memory"); }
+
+void disable() { asm volatile("cli" : : : "memory"); }
+
+bool enabled() {
+    u64 flags = 0;
+    asm volatile("pushfq; popq %0" : "=r"(flags));
+    return (flags & (1ULL << 9U)) != 0;
+}
+
 void dispatch(ExceptionFrame* frame) {
     if (frame == nullptr) {
         platform::halt();
@@ -216,6 +235,10 @@ void dispatch(ExceptionFrame* frame) {
         (frame->error_code & 1U) == 0 && doxxer_fault_resume_rip != 0) {
         page_fault_seen = true;
         frame->rip = doxxer_fault_resume_rip;
+        return;
+    }
+    if (frame->vector >= 32 && frame->vector < 256 && handlers[frame->vector] != nullptr) {
+        handlers[frame->vector](*frame);
         return;
     }
     fatal_exception(*frame);

@@ -21,14 +21,28 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '-serial',"file:$log",'-no-reboot',
         '-device','isa-debug-exit'
     ) + $MediaArgs
-    $process = Start-Process -FilePath $qemu -ArgumentList $args -PassThru -WindowStyle Hidden -RedirectStandardError $errorLog
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $qemu
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Arguments = (($args | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+    }) -join ' ')
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) { throw "$Name could not start QEMU" }
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
         $process.Kill()
         throw "$Name smoke test timed out. See $log"
     }
+    $diagnostics = $process.StandardError.ReadToEnd()
+    [System.IO.File]::WriteAllText($errorLog, $diagnostics)
+    $process.WaitForExit()
+    $exitCode = $process.ExitCode
     if (-not (Test-Path -LiteralPath $log)) {
         $details = if (Test-Path -LiteralPath $errorLog) { Get-Content -LiteralPath $errorLog -Raw } else { 'no QEMU diagnostics' }
-        throw "$Name produced no serial log (exit $($process.ExitCode)): $details"
+        throw "$Name produced no serial log (exit $exitCode): $details"
     }
     $serial = Get-Content -LiteralPath $log -Raw
     $markers = @(
@@ -41,13 +55,17 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] EXCEPTION AND GUARD SELF-TEST PASSED',
         '[OK] GUARDED KERNEL STACK ACTIVE',
         '[OK] HARDENED HEAP ONLINE',
+        '[OK] ACPI TABLES VALIDATED',
+        '[OK] LOCAL APIC ONLINE',
+        '[OK] IOAPIC MASKED',
+        '[OK] APIC TIMER ONLINE',
         '[OK] FRAMEBUFFER ONLINE',
         'DOXXER_BOOT_OK'
     )
     foreach ($marker in $markers) {
         if (-not $serial.Contains($marker)) { throw "$Name missing marker '$marker'. See $log" }
     }
-    if ($process.ExitCode -ne 33) { throw "$Name returned $($process.ExitCode), expected 33. See $log" }
+    if ($exitCode -ne 33) { throw "$Name returned $exitCode, expected 33. See $log" }
     Write-Host "$Name smoke test passed." -ForegroundColor Green
 }
 

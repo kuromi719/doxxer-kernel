@@ -19,12 +19,16 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Private GDT/TSS/IDT, 256 interrupt stubs, and register-rich exception diagnostics
 - Boot-time breakpoint, IST-routing, and real guard-page fault recovery tests
 - Hardened slab/page kernel heap with keyed canaries, quarantine, and secure wiping
+- Checksummed RSDP/XSDT, MADT, and HPET discovery with bounded ACPI parsing
+- Explicit uncached MMIO mappings for Local APIC, I/O APIC, and HPET registers
+- Legacy PIC shutdown, fail-closed I/O APIC masking, and calibrated periodic APIC timer
+- Registered external-interrupt dispatch with a live boot-time timer delivery test
 - W^X-compatible ELF segments and non-executable stack
 - Bootable GPT/FAT disk image and UEFI ISO
 - Automated disk and ISO smoke tests
 - 128 MiB low-memory and 5 GiB high-memory QEMU coverage
 
-External interrupt controllers, user mode, networking, drivers, Secure Boot, and physical-hardware support are intentionally deferred.
+User mode, networking, general drivers, SMP startup, Secure Boot, and physical-hardware support are intentionally deferred.
 
 ## Prerequisites
 
@@ -74,6 +78,7 @@ Artifacts are written to `build/doxxer-kernel.elf`, `dist/doxxer-uefi.img`, and 
 See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
 [`docs/CPU_PROTECTION.md`](docs/CPU_PROTECTION.md) for descriptor, exception, and stack design,
 [`docs/HEAP.md`](docs/HEAP.md) for dynamic allocation invariants,
+[`docs/INTERRUPTS.md`](docs/INTERRUPTS.md) for ACPI and interrupt-controller design,
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the initial threat model, and
 [`SECURITY.md`](SECURITY.md) for reporting guidance.
 

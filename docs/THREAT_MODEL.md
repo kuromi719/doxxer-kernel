@@ -34,6 +34,10 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 - Fatal exceptions report vector, error code, CR2, control state, and general registers before halting with interrupts disabled.
 - Dynamic allocations are zeroed on allocation and release, protected by entropy-derived metadata and tail canaries, and delayed through a bounded quarantine.
 - Slab pages and page-backed allocations have unmapped guards; released large objects are immediately unmapped so stale access faults.
+- ACPI root and child tables are checksum-validated and bounded before MADT/HPET fields are accepted; malformed entry lengths, duplicate critical tables, invalid interrupt overrides, and oversized tables fail closed.
+- Interrupt-controller MMIO is remapped supervisor-only, non-executable, writable, and cache-disabled instead of being accessed through an arbitrary inherited alias.
+- The legacy PIC is fully masked and every I/O APIC redirection entry begins masked. Only the private periodic Local APIC timer is enabled in this milestone.
+- Timer delivery is tested through the real IDT/IST path against an independent HPET deadline before boot is considered successful.
 - Serial panic diagnostics followed by an interrupt-disabled halt.
 
 ## Out of scope for milestone 1
@@ -46,4 +50,4 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 
 ## Planned direction
 
-Future milestones should rebuild inherited kernel mappings with section-granular permissions, add APIC interrupt routing, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Allocator hardening does not make memory-unsafe kernel code safe; detected corruption still requires a fail-closed caller policy. Each milestone must update this document before expanding the trusted computing base.
+Future milestones should rebuild inherited kernel mappings with section-granular permissions, add per-device interrupt routing and SMP startup, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Allocator hardening does not make memory-unsafe kernel code safe; detected corruption still requires a fail-closed caller policy. Each milestone must update this document before expanding the trusted computing base.

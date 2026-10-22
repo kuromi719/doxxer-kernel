@@ -1,6 +1,8 @@
+#include <doxxer/arch/x86_64/apic.hpp>
 #include <doxxer/arch/x86_64/protection.hpp>
 #include <doxxer/arch/x86_64/serial.hpp>
 #include <doxxer/boot/requests.hpp>
+#include <doxxer/firmware/acpi.hpp>
 #include <doxxer/graphics/framebuffer.hpp>
 #include <doxxer/log.hpp>
 #include <doxxer/memory/heap.hpp>
@@ -34,6 +36,44 @@ namespace {
     log::write_decimal(heap_stats.quarantined_objects);
     log::write("\n");
     log::success("HARDENED HEAP ONLINE");
+
+    if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
+        log::write("[ERROR] ACPI FAILURE STAGE: ");
+        log::write_decimal(firmware::acpi::failure_code());
+        log::write("\n");
+        panic("ACPI VALIDATION FAILED");
+    }
+    const firmware::acpi::Topology* topology = firmware::acpi::topology();
+    if (topology == nullptr) {
+        panic("ACPI TOPOLOGY UNAVAILABLE");
+    }
+    log::write("[INFO] ACPI PROCESSORS: ");
+    log::write_decimal(topology->enabled_processors);
+    log::write(" / IOAPICS: ");
+    log::write_decimal(topology->io_apic_count);
+    log::write("\n");
+    log::success("ACPI TABLES VALIDATED");
+
+    if (!arch::x86_64::apic::initialize(*topology)) {
+        log::write("[ERROR] APIC FAILURE STAGE: ");
+        log::write_decimal(arch::x86_64::apic::failure_code());
+        log::write("\n");
+        panic("APIC INITIALIZATION FAILED");
+    }
+    log::success("LOCAL APIC ONLINE");
+    log::success("IOAPIC MASKED");
+    if (!arch::x86_64::apic::timer_self_test()) {
+        log::write("[ERROR] APIC TIMER FAILURE STAGE: ");
+        log::write_decimal(arch::x86_64::apic::failure_code());
+        log::write("\n");
+        panic("APIC TIMER SELF-TEST FAILED");
+    }
+    log::write("[INFO] APIC TIMER PERIOD (US): ");
+    log::write_decimal(arch::x86_64::apic::timer_period_microseconds());
+    log::write(" / OBSERVED TICKS: ");
+    log::write_decimal(arch::x86_64::apic::timer_ticks());
+    log::write("\n");
+    log::success("APIC TIMER ONLINE");
 
     const volatile limine_framebuffer_response* framebuffer_response =
         boot::framebuffer_request.response;
