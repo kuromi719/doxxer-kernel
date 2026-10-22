@@ -12,6 +12,7 @@
 #include <doxxer/panic.hpp>
 #include <doxxer/platform.hpp>
 #include <doxxer/scheduler/scheduler.hpp>
+#include <doxxer/security/capability.hpp>
 
 namespace {
 [[noreturn]] void protected_kernel_main() {
@@ -38,6 +39,21 @@ namespace {
     log::write_decimal(heap_stats.quarantined_objects);
     log::write("\n");
     log::success("HARDENED HEAP ONLINE");
+
+    if (!security::capability::initialize()) {
+        panic("CAPABILITY REGISTRY INITIALIZATION FAILED");
+    }
+    if (!security::capability::self_test()) {
+        log::write("[ERROR] CAPABILITY SELF-TEST STAGE: ");
+        log::write_decimal(security::capability::failure_code());
+        log::write("\n");
+        panic("CAPABILITY SECURITY SELF-TEST FAILED");
+    }
+    const security::capability::Statistics capability_stats = security::capability::statistics();
+    log::write("[INFO] CAPABILITY REJECTIONS VERIFIED: ");
+    log::write_decimal(capability_stats.rejected_operations);
+    log::write("\n");
+    log::success("CAPABILITY SECURITY MODEL ONLINE");
 
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");

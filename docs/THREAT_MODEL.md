@@ -43,6 +43,9 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 - Secondary processors execute only bounded scheduler-owned run-to-completion tasks and otherwise remain in an interruptible halt loop; resumable or user-controlled threads do not exist yet.
 - Kernel task dispatch uses bounded per-CPU queues and a fixed task pool rather than attacker-controlled dynamic queue growth. Every task executes on a dedicated supervisor-only NX stack with unmapped boundary guards, a keyed layout canary, and full stack wiping between uses.
 - Task handles include generations to reject stale release/completion operations. Queue and lifecycle publication use locks plus acquire/release atomics, while IPI wakeups carry no caller-controlled function pointer.
+- Kernel authority is represented by typed, rights-limited capabilities rather than ambient global handles. Derived capabilities cannot gain rights, and revoking any ancestor invalidates its entire descendant chain without a global scan.
+- Capability tokens combine a slot, a 22-bit generation, and an entropy-keyed 36-bit authentication tag. Tokens are validated against their domain nonce, complete metadata, parent chain, object type, and required rights before use.
+- Object access returns a pinned lease. Destruction fails while leases exist, preventing capability validation from becoming a time-of-check/time-of-use pointer race.
 - Serial panic diagnostics followed by an interrupt-disabled halt.
 
 ## Out of scope for milestone 1
@@ -52,6 +55,7 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 - Secure Boot, measured boot, TPM attestation, and disk encryption.
 - Side-channel resistance.
 - Isolation between applications, because user mode does not yet exist.
+- Capability authentication is defense in depth for kernel handles, not a substitute for syscall-boundary isolation or cryptographic authentication across machines.
 
 ## Planned direction
 

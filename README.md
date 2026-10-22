@@ -27,6 +27,8 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Cross-CPU fixed IPI delivery test with bounded HPET startup and response deadlines
 - Bounded per-CPU kernel task queues with isolated guarded stacks and generation-safe handles
 - IPI wakeups, idle `hlt`, explicit task lifecycle, stack wiping, and cross-CPU execution tests
+- Capability-first kernel authority model with attenuation, revocation ancestry, typed objects, and pinned leases
+- Entropy-keyed 36-bit token authentication plus generational stale-handle rejection
 - W^X-compatible ELF segments and non-executable stack
 - Bootable GPT/FAT disk image and UEFI ISO
 - Automated disk and ISO smoke tests
@@ -85,6 +87,7 @@ See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
 [`docs/INTERRUPTS.md`](docs/INTERRUPTS.md) for ACPI and interrupt-controller design,
 [`docs/SMP.md`](docs/SMP.md) for multiprocessor and CPU-local invariants,
 [`docs/SCHEDULER.md`](docs/SCHEDULER.md) for kernel task dispatch and isolation,
+[`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) for the authority and object-lifetime model,
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the initial threat model, and
 [`SECURITY.md`](SECURITY.md) for reporting guidance.
 
