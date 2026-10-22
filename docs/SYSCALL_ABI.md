@@ -34,7 +34,9 @@ The dispatcher boot self-test exercises all supported object families plus inval
 and call number rejection. It also constructs two real user pages in a child process, copies an
 `abi_info` request through the temporary mapping window, dispatches it under the child capability
 domain, copies the initialized response back, and rejects read-only and non-canonical ranges. The
-architecture probe validates hardware privilege entry, selector state, user RIP/RSP capture, CR3
-restoration, the same process-bound copy gateway, response contents, and MSR restoration. Per-CPU
-syscall stacks, canonical return validation, `SWAPGS`, and scheduler integration remain required
-before allowing persistent arbitrary ring-3 callers.
+architecture probes validate hardware privilege entry, selector state, user RIP/RSP capture, CR3
+restoration, the same process-bound copy gateway, response contents, and MSR restoration. After SMP
+startup, a second two-call probe exercises `SWAPGS`, a CPU-local guarded syscall stack, process
+binding, canonical/mapping/flag return validation, and an actual fixed-selector `IRETQ` return to
+user code. Scheduler-owned binding, application-processor MSR installation, and user-origin
+interrupt delivery remain required before allowing persistent arbitrary ring-3 callers.

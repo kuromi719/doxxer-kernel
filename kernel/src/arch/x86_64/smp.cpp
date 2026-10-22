@@ -26,6 +26,7 @@ constexpr u64 kIpiTimeoutMicroseconds = 250'000;
 constexpr u16 kTaskStateSelector = 0x28;
 constexpr u8 kProbeVector = 0xE1;
 constexpr u32 kGsBaseMsr = 0xC000'0101U;
+constexpr u32 kKernelGsBaseMsr = 0xC000'0102U;
 constexpr u64 kSyscallStackCanary = 0x4458'5359'5343'414EULL;
 
 enum class CpuStatus : u32 {
@@ -78,12 +79,18 @@ struct alignas(64) CpuState {
     StackMapping emergency_stack;
     StackMapping syscall_stack;
     u64 syscall_stack_canary;
+    u64 syscall_stack_top;
+    void* syscall_context;
+    u64 syscall_user_rsp;
     alignas(16) u64 gdt[7];
     alignas(16) TaskStateSegment tss;
 };
 
 static_assert(sizeof(TaskStateSegment) == 104);
 static_assert(sizeof(DescriptorTablePointer) == 10);
+static_assert(__builtin_offsetof(CpuState, syscall_stack_top) == 136);
+static_assert(__builtin_offsetof(CpuState, syscall_context) == 144);
+static_assert(__builtin_offsetof(CpuState, syscall_user_rsp) == 152);
 
 alignas(64) CpuState cpus[kMaximumProcessors]{};
 u32 discovered_processors = 0;
@@ -97,6 +104,13 @@ void write_gs_base(CpuState* cpu) {
                  :
                  : "c"(kGsBaseMsr), "a"(static_cast<u32>(value)),
                    "d"(static_cast<u32>(value >> 32U))
+                 : "memory");
+}
+
+void clear_kernel_gs_base() {
+    asm volatile("wrmsr"
+                 :
+                 : "c"(kKernelGsBaseMsr), "a"(0U), "d"(0U)
                  : "memory");
 }
 
@@ -158,6 +172,9 @@ void initialize_syscall_stack(CpuState& cpu) {
         words[index] = 0;
     }
     cpu.syscall_stack_canary = syscall_stack_canary(cpu);
+    cpu.syscall_stack_top = cpu.syscall_stack.top();
+    cpu.syscall_context = nullptr;
+    cpu.syscall_user_rsp = 0;
     words[0] = cpu.syscall_stack_canary;
 }
 
@@ -231,6 +248,7 @@ void probe_handler(interrupts::ExceptionFrame&) {
         halt_cpu();
     }
     write_gs_base(cpu);
+    clear_kernel_gs_base();
     if (!apic::initialize_secondary(cpu->apic_id)) {
         __atomic_store_n(&cpu->status, static_cast<u32>(CpuStatus::failed), __ATOMIC_RELEASE);
         halt_cpu();
@@ -325,6 +343,7 @@ bool initialize(const volatile limine_mp_response* response,
         return false;
     }
     write_gs_base(bsp);
+    clear_kernel_gs_base();
 
     for (u32 index = 0; index < discovered_processors; ++index) {
         limine_mp_info* info = response->cpus[index];
@@ -466,6 +485,31 @@ bool current_syscall_stack(u64& stack_bottom, u64& stack_top) {
     stack_bottom = cpu->syscall_stack.virtual_base + kPageSize;
     stack_top = cpu->syscall_stack.top();
     return true;
+}
+
+bool bind_syscall_context(void* context) {
+    CpuState* cpu = current_cpu();
+    if (!initialized || context == nullptr || cpu == nullptr || cpu->self != cpu ||
+        cpu->index >= discovered_processors || !syscall_stack_intact(*cpu) ||
+        cpu->syscall_stack_top != cpu->syscall_stack.top() ||
+        __atomic_load_n(&cpu->syscall_context, __ATOMIC_ACQUIRE) != nullptr) {
+        return false;
+    }
+    cpu->syscall_user_rsp = 0;
+    __atomic_store_n(&cpu->syscall_context, context, __ATOMIC_RELEASE);
+    return true;
+}
+
+bool unbind_syscall_context(void* context) {
+    CpuState* cpu = current_cpu();
+    if (!initialized || context == nullptr || cpu == nullptr || cpu->self != cpu ||
+        cpu->index >= discovered_processors ||
+        __atomic_load_n(&cpu->syscall_context, __ATOMIC_ACQUIRE) != context) {
+        return false;
+    }
+    __atomic_store_n(&cpu->syscall_context, nullptr, __ATOMIC_RELEASE);
+    cpu->syscall_user_rsp = 0;
+    return syscall_stack_intact(*cpu);
 }
 
 bool install_worker_entry(WorkerEntry entry) {

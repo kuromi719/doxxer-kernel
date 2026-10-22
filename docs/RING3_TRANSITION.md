@@ -32,7 +32,15 @@ the boot CPU. It exposes only a fixed `abi_info` request from fixed probe code, 
 arbitrary applications, and does not constitute a scheduler.
 
 Dedicated per-CPU guarded syscall stacks are provisioned during SMP startup and verified on every
-processor. A production entry path still requires binding those stacks to active thread state,
-`SWAPGS` discipline, canonical return checks, signal/exception delivery, preemption rules, and an
-audited `SYSRETQ` versus `IRETQ` return policy. The boot-only LSTAR is removed and the original MSR
-state restored immediately.
+processor. After SMP startup a second hardware probe binds a live process lease into the BSP's
+CPU-local state, enters user mode with an empty user GS base, executes the production-style
+`SWAPGS` entry, switches immediately to the guarded syscall stack, validates user RIP/RSP/RFLAGS,
+dispatches through the process copy gateway, and returns through a fixed-selector `IRETQ` frame.
+User code then performs a second syscall, proving that the return path really resumed CPL3.
+
+The entry path deliberately uses `IRETQ` rather than the more fragile `SYSRETQ` fast path. Invalid
+canonical state, forbidden privilege flags, a missing CPU-local process binding, or an invalid
+executable/stack mapping fail closed before return. The boot probe restores all modified MSRs and
+requires exact page/reference accounting. Remaining runtime work includes scheduler-owned binding
+for arbitrary user threads, user-origin interrupt/exception delivery, preemption rules, and
+installing the entry MSRs on every application processor.

@@ -294,6 +294,14 @@ namespace {
     log::write_decimal(syscall_stack_top - syscall_stack_bottom);
     log::write("\n");
     log::success("PER-CPU GUARDED SYSCALL STACKS ONLINE");
+    if (!arch::x86_64::ring3::runtime_self_test()) {
+        log::write("[ERROR] RUNTIME SYSCALL SELF-TEST STAGE: ");
+        log::write_decimal(arch::x86_64::ring3::failure_code());
+        log::write("\n");
+        panic("RUNTIME SYSCALL ENTRY SELF-TEST FAILED");
+    }
+    log::success("SWAPGS SYSCALL ENTRY ONLINE");
+    log::success("VALIDATED IRETQ USER RETURN VERIFIED");
     if (!scheduler::initialize()) {
         log::write("[ERROR] SCHEDULER FAILURE STAGE: ");
         log::write_decimal(scheduler::failure_code());

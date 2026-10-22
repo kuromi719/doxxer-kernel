@@ -25,7 +25,7 @@ physical allocation, keyed by the boot entropy-seeded stack guard.
 
 The IDT and handler table are shared and installed before processors are released. The TSS is never shared because the x86 busy state and IST pointers are processor-specific.
 
-The `IA32_GS_BASE` MSR points at a cache-line-aligned CPU record. Interrupt code validates the self pointer, bounded CPU index, and Local APIC ID before modifying CPU-local state. This avoids repeatedly scanning global topology in future hot paths and establishes the base needed by a scheduler.
+The `IA32_GS_BASE` MSR points at a cache-line-aligned CPU record and `IA32_KERNEL_GS_BASE` is cleared before a processor is published. Interrupt code validates the self pointer, bounded CPU index, and Local APIC ID before modifying CPU-local state. A user transition swaps the CPU record into `IA32_KERNEL_GS_BASE`; `SYSCALL` executes `SWAPGS` before reading the bound process pointer, saved user RSP, or guarded stack top. This avoids repeatedly scanning global topology in hot paths and keeps user-controlled GS state outside privileged addressing.
 
 ## Publication and ordering
 
