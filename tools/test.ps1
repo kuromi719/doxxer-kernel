@@ -10,13 +10,13 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 & (Join-Path $PSScriptRoot 'invoke-make.ps1') -Target clean
 & (Join-Path $PSScriptRoot 'invoke-make.ps1') -Target all -Arguments @('TEST_MODE=1')
 
-function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory = '512M') {
+function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory = '512M', [int]$Processors = 4) {
     $log = Join-Path $logDir "$Name.log"
     $errorLog = Join-Path $logDir "$Name-qemu-error.log"
     Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $errorLog -ErrorAction SilentlyContinue
     $args = @(
-        '-machine','q35','-smp','4','-m',$Memory,'-display','none','-monitor','none',
+        '-machine','q35','-smp',"$Processors",'-m',$Memory,'-display','none','-monitor','none',
         '-drive',"if=pflash,format=raw,readonly=on,file=$firmware",
         '-serial',"file:$log",'-no-reboot',
         '-device','isa-debug-exit'
@@ -60,6 +60,8 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] IOAPIC MASKED',
         '[OK] PER-CPU RUNTIME ONLINE',
         '[OK] SMP IPI SELF-TEST PASSED',
+        '[OK] PER-CPU SCHEDULER ONLINE',
+        '[OK] CROSS-CPU TASK SELF-TEST PASSED',
         '[OK] APIC TIMER ONLINE',
         '[OK] FRAMEBUFFER ONLINE',
         'DOXXER_BOOT_OK'
@@ -75,3 +77,5 @@ Invoke-SmokeTest 'disk' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxx
 Invoke-SmokeTest 'iso' @('-cdrom',(Join-Path $root 'dist\doxxer.iso'))
 Invoke-SmokeTest 'lowmem' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')") '128M'
 Invoke-SmokeTest 'highmem' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')") '5G'
+Invoke-SmokeTest 'singlecpu' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')") '512M' 1
+Invoke-SmokeTest 'eightcpu' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')") '512M' 8

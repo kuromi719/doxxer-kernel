@@ -25,12 +25,14 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Registered external-interrupt dispatch with a live boot-time timer delivery test
 - Four-CPU SMP bring-up with isolated guarded stacks, per-CPU GDT/TSS state, and GS-based CPU-local identity
 - Cross-CPU fixed IPI delivery test with bounded HPET startup and response deadlines
+- Bounded per-CPU kernel task queues with isolated guarded stacks and generation-safe handles
+- IPI wakeups, idle `hlt`, explicit task lifecycle, stack wiping, and cross-CPU execution tests
 - W^X-compatible ELF segments and non-executable stack
 - Bootable GPT/FAT disk image and UEFI ISO
 - Automated disk and ISO smoke tests
 - 128 MiB low-memory and 5 GiB high-memory QEMU coverage
 
-User mode, scheduling, networking, general drivers, Secure Boot, and physical-hardware support are intentionally deferred.
+User mode, preemptive scheduling, networking, general drivers, Secure Boot, and physical-hardware support are intentionally deferred.
 
 ## Prerequisites
 
@@ -82,6 +84,7 @@ See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
 [`docs/HEAP.md`](docs/HEAP.md) for dynamic allocation invariants,
 [`docs/INTERRUPTS.md`](docs/INTERRUPTS.md) for ACPI and interrupt-controller design,
 [`docs/SMP.md`](docs/SMP.md) for multiprocessor and CPU-local invariants,
+[`docs/SCHEDULER.md`](docs/SCHEDULER.md) for kernel task dispatch and isolation,
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the initial threat model, and
 [`SECURITY.md`](SECURITY.md) for reporting guidance.
 

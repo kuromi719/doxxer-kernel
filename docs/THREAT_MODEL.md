@@ -40,7 +40,9 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 - Timer delivery is tested through the real IDT/IST path against an independent HPET deadline before boot is considered successful.
 - Each secondary processor receives separate guarded kernel, exception, and emergency stacks plus a private GDT/TSS. A CPU cannot accidentally share another CPU's busy TSS or exception stack.
 - CPU-local identity is rooted at a kernel-controlled GS base and cross-checked against the Local APIC ID in the IPI path. Processor startup and IPI acknowledgement both use bounded HPET deadlines.
-- Secondary processors remain in a minimal interruptible halt loop; no scheduler or arbitrary cross-CPU work execution exists yet.
+- Secondary processors execute only bounded scheduler-owned run-to-completion tasks and otherwise remain in an interruptible halt loop; resumable or user-controlled threads do not exist yet.
+- Kernel task dispatch uses bounded per-CPU queues and a fixed task pool rather than attacker-controlled dynamic queue growth. Every task executes on a dedicated supervisor-only NX stack with unmapped boundary guards, a keyed layout canary, and full stack wiping between uses.
+- Task handles include generations to reject stale release/completion operations. Queue and lifecycle publication use locks plus acquire/release atomics, while IPI wakeups carry no caller-controlled function pointer.
 - Serial panic diagnostics followed by an interrupt-disabled halt.
 
 ## Out of scope for milestone 1
@@ -53,4 +55,4 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 
 ## Planned direction
 
-Future milestones should rebuild inherited kernel mappings with section-granular permissions, add per-device interrupt routing and a scheduler, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Allocator hardening does not make memory-unsafe kernel code safe; detected corruption still requires a fail-closed caller policy. Each milestone must update this document before expanding the trusted computing base.
+Future milestones should rebuild inherited kernel mappings with section-granular permissions, add per-device interrupt routing and preemptive threads, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Allocator hardening does not make memory-unsafe kernel code safe; detected corruption still requires a fail-closed caller policy. Each milestone must update this document before expanding the trusted computing base.

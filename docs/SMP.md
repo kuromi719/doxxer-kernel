@@ -28,11 +28,11 @@ CPU records and mappings are completed before the MP `goto_address` is published
 
 Vector `0xE1` is reserved as a kernel IPI probe. The bootstrap processor sends a fixed IPI to every secondary processor and requires each CPU-local acknowledgement counter to advance before a 250 ms HPET deadline. The handler performs only validation, an atomic counter increment, and Local APIC EOI.
 
-Automated QEMU tests now use four virtual processors for disk, ISO, low-memory, and high-memory configurations. This makes multiprocessor startup a required boot invariant rather than untested optional code.
+Automated QEMU tests use four virtual processors for disk, ISO, low-memory, and high-memory configurations, plus explicit one-CPU and eight-CPU variants. This makes both uniprocessor fallback and multiprocessor startup required boot invariants rather than untested optional code.
 
 ## Deferred work
 
-- Per-CPU run queues and scheduling clocks
+- Preemptive scheduling clocks and thread context switching
 - Scheduler-aware cross-CPU calls and TLB shootdowns
 - CPU hot-plug and graceful offlining
 - x2APIC and interrupt-remapping support

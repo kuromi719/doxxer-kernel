@@ -82,6 +82,7 @@ alignas(64) CpuState cpus[kMaximumProcessors]{};
 u32 discovered_processors = 0;
 u32 last_failure = 0;
 bool initialized = false;
+WorkerEntry worker_entry = nullptr;
 
 void write_gs_base(CpuState* cpu) {
     const u64 value = reinterpret_cast<u64>(cpu);
@@ -193,6 +194,12 @@ void probe_handler(interrupts::ExceptionFrame&) {
     __atomic_store_n(&cpu->status, static_cast<u32>(CpuStatus::online), __ATOMIC_RELEASE);
     interrupts::enable();
     for (;;) {
+        WorkerEntry entry = __atomic_load_n(&worker_entry, __ATOMIC_ACQUIRE);
+        if (entry != nullptr) {
+            entry();
+            __atomic_store_n(&cpu->status, static_cast<u32>(CpuStatus::failed), __ATOMIC_RELEASE);
+            halt_cpu();
+        }
         asm volatile("hlt");
     }
 }
@@ -359,6 +366,30 @@ u32 current_processor_id() {
 u32 current_apic_id() {
     CpuState* cpu = current_cpu();
     return cpu == nullptr || cpu->self != cpu ? 0xFFFF'FFFFU : cpu->apic_id;
+}
+
+u32 current_index() {
+    CpuState* cpu = current_cpu();
+    return cpu == nullptr || cpu->self != cpu ? 0xFFFF'FFFFU : cpu->index;
+}
+
+u32 apic_id(u32 index) {
+    return index >= discovered_processors ? 0xFFFF'FFFFU : cpus[index].apic_id;
+}
+
+bool install_worker_entry(WorkerEntry entry) {
+    if (!initialized || entry == nullptr ||
+        __atomic_load_n(&worker_entry, __ATOMIC_ACQUIRE) != nullptr) {
+        return false;
+    }
+    __atomic_store_n(&worker_entry, entry, __ATOMIC_RELEASE);
+    const u32 bsp_id = apic::current_id();
+    for (u32 index = 0; index < discovered_processors; ++index) {
+        if (cpus[index].apic_id != bsp_id && !apic::send_ipi(cpus[index].apic_id, kProbeVector)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 u32 failure_code() { return last_failure; }

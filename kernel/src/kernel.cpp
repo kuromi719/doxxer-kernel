@@ -11,6 +11,7 @@
 #include <doxxer/memory/virtual.hpp>
 #include <doxxer/panic.hpp>
 #include <doxxer/platform.hpp>
+#include <doxxer/scheduler/scheduler.hpp>
 
 namespace {
 [[noreturn]] void protected_kernel_main() {
@@ -82,6 +83,28 @@ namespace {
         panic("SMP IPI SELF-TEST FAILED");
     }
     log::success("SMP IPI SELF-TEST PASSED");
+    if (!scheduler::initialize()) {
+        log::write("[ERROR] SCHEDULER FAILURE STAGE: ");
+        log::write_decimal(scheduler::failure_code());
+        log::write("\n");
+        panic("SCHEDULER INITIALIZATION FAILED");
+    }
+    log::success("PER-CPU SCHEDULER ONLINE");
+    if (!scheduler::self_test()) {
+        log::write("[ERROR] SCHEDULER SELF-TEST STAGE: ");
+        log::write_decimal(scheduler::failure_code());
+        log::write("\n");
+        panic("SCHEDULER SELF-TEST FAILED");
+    }
+    const scheduler::Statistics scheduler_stats = scheduler::statistics();
+    log::write("[INFO] SCHEDULER TASKS: ");
+    log::write_decimal(scheduler_stats.completed);
+    log::write(" COMPLETED / ");
+    log::write_decimal(scheduler_stats.failed);
+    log::write(" FAILED / CAPACITY ");
+    log::write_decimal(scheduler_stats.capacity);
+    log::write("\n");
+    log::success("CROSS-CPU TASK SELF-TEST PASSED");
     if (!arch::x86_64::apic::timer_self_test()) {
         log::write("[ERROR] APIC TIMER FAILURE STAGE: ");
         log::write_decimal(arch::x86_64::apic::failure_code());
