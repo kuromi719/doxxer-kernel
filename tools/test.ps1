@@ -78,6 +78,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] HARDENED ELF64 LOADER ONLINE',
         '[OK] SEALED IMAGE TRUST POLICY ONLINE',
         '[OK] GUARDED USER THREAD CONTEXTS ONLINE',
+        '[OK] RING-3 SYSCALL TRANSITION VERIFIED',
         '[OK] ACPI TABLES VALIDATED',
         '[OK] DMA REMAPPING DEFAULT-DENY',
         '[OK] DMA ROOT TABLES PINNED',

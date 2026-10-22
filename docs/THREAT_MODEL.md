@@ -51,6 +51,7 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 - User and managed supervisor mappings hold sealed per-page references, so mapped RAM cannot be freed or recycled behind a stale page-table alias. Address spaces with live mappings cannot be destroyed, user/supervisor classification cannot be changed in place, the supervisor mapping API rejects managed user pages, and no public general broad-HHDM accessor is exposed.
 - Every Doxxer-managed non-leaf page-table entry holds a sealed reference to its child table. Linked tables cannot be freed or recycled, copied supervisor-window roots are counted per address space, and page-table/metadata pages are rejected as ordinary supervisor leaf mappings.
 - Runtime kernel access to user-owned RAM uses domain-checked per-CPU temporary aliases that are supervisor-only, NX, pinned for their lifetime, and locally invalidated before reuse. Interrupts are held off to prevent migration while a slot is active, and failed teardown quarantines the slot.
+- A boot-only hardware privilege probe enters a domain-isolated executable page through `IRETQ`, verifies CPL3 CS/SS values in user code, crosses `SYSCALL`, captures user RIP/RSP/RFLAGS on a supervisor stack, restores the kernel CR3, and restores all modified syscall MSRs before cleanup. The probe uses fixed code, disables interrupts, and is not a production syscall service.
 - Every online processor must independently enable and read back CR0 write protection, NX, SMEP, SMAP, UMIP, restricted user timing, and disabled user RDPMC/FSGSBASE. Advertised IBRS, STIBP, SSBD, and IBPB controls are enabled, interrupt entry clears AC, live SMAP data-access and SMEP instruction-fetch probes verify hardware enforcement, and kernel mappings are checked against RX/R/RW linker boundaries before boot succeeds.
 - Capability tokens combine a slot, a 22-bit generation, and an entropy-keyed 36-bit authentication tag. Tokens are validated against their domain nonce, complete metadata, parent chain, object type, and required rights before use.
 - Object access returns a pinned lease. Destruction fails while leases exist, preventing capability validation from becoming a time-of-check/time-of-use pointer race.
@@ -62,7 +63,7 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 - Malicious firmware, hypervisor, bootloader, compiler, or hardware.
 - Secure Boot, TPM attestation, and disk encryption. Kernel-side executable measurement is now present, but firmware-to-kernel authenticity is not yet established.
 - Side-channel resistance.
-- Isolation between applications, because user mode does not yet exist.
+- Concurrent isolation between running applications; only a fixed boot-time CPL3 transition probe exists.
 - Capability authentication is defense in depth for kernel handles, not a substitute for syscall-boundary isolation or cryptographic authentication across machines.
 
 ## Planned direction

@@ -1,7 +1,8 @@
 # Syscall ABI Foundation
 
-The first Doxxer syscall contract is a versioned, pointer-free request envelope. It is deliberately
-separate from the future x86_64 `SYSCALL/SYSRET` entry assembly.
+The first Doxxer syscall contract is a versioned, pointer-free request envelope. It remains
+separate from production x86_64 entry assembly. Boot now verifies a single-shot CPL3-to-kernel
+`SYSCALL` transition, but that probe deliberately does not expose this dispatcher to user code.
 
 ## Contract
 
@@ -21,6 +22,8 @@ ABI 1 supports feature discovery, IPC send/receive, event signal/try-wait, and p
 inspect/terminate. Empty queues and authorization failures deliberately share a coarse result at
 this layer to reduce accidental object-existence disclosure.
 
-The boot self-test exercises all supported object families plus invalid version, flag, and call
-number rejection. Hardware privilege transition, user-copy recovery, and per-thread syscall state
-remain required before exposing this dispatcher to ring 3.
+The dispatcher boot self-test exercises all supported object families plus invalid version, flag,
+and call number rejection. The architecture probe independently validates hardware privilege
+entry, selector state, user RIP/RSP capture, CR3 restoration, and MSR restoration. Per-CPU syscall
+stacks, request copying, canonical return validation, and scheduler integration remain required
+before exposing this dispatcher to ring 3.

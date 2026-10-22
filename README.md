@@ -41,6 +41,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Strict ELF64 loader with transactional rollback, W^X segments, and zeroed BSS
 - Closed-by-default executable policy with SHA-256 measurements and irreversible boot-time sealing
 - Capability-owned user-thread contexts with pinned process spaces and guarded stacks
+- Hardware-verified CPL3 `IRETQ` entry and `SYSCALL` return-to-kernel boundary probe
 - Immutable supervisor stack windows shared into processes without user accessibility or ownership
 - Fail-closed Intel VT-d activation with an empty root table that denies all PCI DMA by default
 - Boot-keyed shadow page ledger with typed ownership, zero-on-transition, and user-map enforcement
@@ -55,8 +56,8 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Automated disk and ISO smoke tests
 - 128 MiB low-memory and 5 GiB high-memory QEMU coverage
 
-Hardware syscall entry, user-mode execution, preemptive scheduling, networking, general drivers,
-Secure Boot, and physical-hardware support are intentionally deferred.
+Persistent user-mode scheduling, production syscall dispatch/return, preemptive scheduling,
+networking, general drivers, Secure Boot, and physical-hardware support are intentionally deferred.
 
 ## Prerequisites
 
@@ -124,6 +125,7 @@ See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
 [`docs/USER_MEMORY.md`](docs/USER_MEMORY.md) for safe address-space copy rules,
 [`docs/ELF_LOADER.md`](docs/ELF_LOADER.md) for executable validation and mapping,
 [`docs/USER_THREADS.md`](docs/USER_THREADS.md) for ring-3 context and stack invariants,
+[`docs/RING3_TRANSITION.md`](docs/RING3_TRANSITION.md) for the hardware privilege-boundary probe,
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the initial threat model, and
 [`SECURITY.md`](SECURITY.md) for reporting guidance.
 

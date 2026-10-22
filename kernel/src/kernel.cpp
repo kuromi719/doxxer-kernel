@@ -2,6 +2,7 @@
 #include <doxxer/arch/x86_64/hardening.hpp>
 #include <doxxer/arch/x86_64/iommu.hpp>
 #include <doxxer/arch/x86_64/protection.hpp>
+#include <doxxer/arch/x86_64/ring3.hpp>
 #include <doxxer/arch/x86_64/serial.hpp>
 #include <doxxer/arch/x86_64/smp.hpp>
 #include <doxxer/boot/requests.hpp>
@@ -190,6 +191,14 @@ namespace {
     log::write_decimal(thread_stats.destroyed_threads);
     log::write(" DESTROYED\n");
     log::success("GUARDED USER THREAD CONTEXTS ONLINE");
+
+    if (!arch::x86_64::ring3::self_test()) {
+        log::write("[ERROR] RING-3 SELF-TEST STAGE: ");
+        log::write_decimal(arch::x86_64::ring3::failure_code());
+        log::write("\n");
+        panic("RING-3 PRIVILEGE TRANSITION SELF-TEST FAILED");
+    }
+    log::success("RING-3 SYSCALL TRANSITION VERIFIED");
 
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");

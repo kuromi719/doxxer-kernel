@@ -1,7 +1,8 @@
 # User Thread Contexts
 
-User-thread objects prepare the state required for a future ring-3 transition without yet
-executing untrusted instructions.
+User-thread objects prepare the state required for scheduled ring-3 execution. Separately, the
+architecture boot probe now executes a fixed instruction sequence at CPL3 and crosses back through
+the processor's `SYSCALL` path; ordinary thread objects are not scheduled yet.
 
 - Creation requires a process control capability with `map` authority.
 - The entry point must already be mapped user-executable in the process address space.
@@ -13,5 +14,6 @@ executing untrusted instructions.
   stacks and mappings are released.
 - Inspection and administration remain separate capability checks.
 
-The next architecture layer can consume the validated context for `IRETQ` entry and connect it to
-the scheduler and syscall return path.
+The next architecture layer must consume these validated contexts from the scheduler, replace the
+single-shot probe state with per-CPU syscall state, copy request envelopes through the validated
+user-copy layer, dispatch them, and return with a hardened `SYSRETQ`/`IRETQ` decision.
