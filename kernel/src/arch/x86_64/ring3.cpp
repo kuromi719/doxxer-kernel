@@ -6,6 +6,7 @@
 #include <doxxer/memory/user_copy.hpp>
 #include <doxxer/memory/virtual.hpp>
 #include <doxxer/process/process.hpp>
+#include <doxxer/scheduler/scheduler.hpp>
 #include <doxxer/security/capability.hpp>
 #include <doxxer/syscall/dispatcher.hpp>
 
@@ -478,7 +479,7 @@ bool runtime_self_test() {
     bool manager_created = false;
     bool process_created = false;
     bool lease_acquired = false;
-    bool context_bound = false;
+    scheduler::UserContextBinding context_binding{};
     bool code_allocated = false;
     bool stack_allocated = false;
     bool request_allocated = false;
@@ -578,8 +579,7 @@ bool runtime_self_test() {
         last_failure = 108;
         goto cleanup;
     }
-    context_bound = arch::x86_64::smp::bind_syscall_context(&lease);
-    if (!context_bound || arch::x86_64::smp::bind_syscall_context(&lease) ||
+    if (!scheduler::bind_user_context(lease, context_binding) ||
         read_msr(kMsrKernelGsBase) != 0) {
         last_failure = 108;
         goto cleanup;
@@ -626,7 +626,7 @@ cleanup:
         write_msr(kMsrFmask, old_fmask);
         write_msr(kMsrEfer, old_efer);
     }
-    if (context_bound && !arch::x86_64::smp::unbind_syscall_context(&lease) &&
+    if (context_binding.active && !scheduler::unbind_user_context(context_binding) &&
         last_failure == 0) {
         last_failure = 110;
     }

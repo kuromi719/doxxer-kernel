@@ -319,15 +319,6 @@ namespace {
         panic("ALL-CPU SYSCALL INITIALIZATION FAILED");
     }
     log::success("ALL-CPU SYSCALL MSRS VERIFIED");
-    if (!arch::x86_64::ring3::runtime_self_test()) {
-        log::write("[ERROR] RUNTIME SYSCALL SELF-TEST STAGE: ");
-        log::write_decimal(arch::x86_64::ring3::failure_code());
-        log::write("\n");
-        panic("RUNTIME SYSCALL ENTRY SELF-TEST FAILED");
-    }
-    log::success("SWAPGS SYSCALL ENTRY ONLINE");
-    log::success("VALIDATED IRETQ USER RETURN VERIFIED");
-    log::success("USER EXCEPTION DELIVERY VERIFIED");
     if (!scheduler::initialize()) {
         log::write("[ERROR] SCHEDULER FAILURE STAGE: ");
         log::write_decimal(scheduler::failure_code());
@@ -350,6 +341,21 @@ namespace {
     log::write_decimal(scheduler_stats.capacity);
     log::write("\n");
     log::success("CROSS-CPU TASK SELF-TEST PASSED");
+    log::write("[INFO] USER CONTEXT BINDINGS: ");
+    log::write_decimal(scheduler_stats.user_context_binds);
+    log::write(" / REJECTIONS: ");
+    log::write_decimal(scheduler_stats.user_context_rejections);
+    log::write("\n");
+    log::success("SCHEDULER USER CONTEXT BINDING VERIFIED");
+    if (!arch::x86_64::ring3::runtime_self_test()) {
+        log::write("[ERROR] RUNTIME SYSCALL SELF-TEST STAGE: ");
+        log::write_decimal(arch::x86_64::ring3::failure_code());
+        log::write("\n");
+        panic("RUNTIME SYSCALL ENTRY SELF-TEST FAILED");
+    }
+    log::success("SWAPGS SYSCALL ENTRY ONLINE");
+    log::success("VALIDATED IRETQ USER RETURN VERIFIED");
+    log::success("USER EXCEPTION DELIVERY VERIFIED");
     if (!arch::x86_64::apic::timer_self_test()) {
         log::write("[ERROR] APIC TIMER FAILURE STAGE: ");
         log::write_decimal(arch::x86_64::apic::failure_code());

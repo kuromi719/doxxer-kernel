@@ -32,8 +32,9 @@ the boot CPU. It exposes only a fixed `abi_info` request from fixed probe code, 
 arbitrary applications, and does not constitute a scheduler.
 
 Dedicated per-CPU guarded syscall stacks are provisioned during SMP startup and verified on every
-processor. After SMP startup a second hardware probe binds a live process lease into the BSP's
-CPU-local state, enters user mode with an empty user GS base, executes the production-style
+processor. After SMP startup a second hardware probe asks the scheduler to bind a validated live
+process lease into the BSP's CPU-local state, enters user mode with an empty user GS base, and
+executes the production-style
 `SWAPGS` entry, switches immediately to the guarded syscall stack, validates user RIP/RSP/RFLAGS,
 dispatches through the process copy gateway, and returns through a fixed-selector `IRETQ` frame.
 User code then performs a second syscall, proving that the return path really resumed CPL3.
@@ -50,5 +51,7 @@ canonical state, forbidden privilege flags, a missing CPU-local process binding,
 executable/stack mapping fail closed before return. The boot probe restores all modified MSRs and
 requires exact page/reference accounting. A serialized rendezvous installs and reads back the
 production `EFER.SCE`, `STAR`, `LSTAR`, and `FMASK` state on every online processor before this
-probe runs. Remaining runtime work includes scheduler-owned binding for arbitrary user threads,
-general process fault termination/notification, and preemption rules.
+probe runs. Remaining runtime work includes persistent user-thread dispatch, general process fault
+termination/notification, and preemption rules. The current scheduler binding is intentionally
+non-migratable: interrupts must remain disabled while it is active, only one context may be
+installed per CPU, and teardown requires the original same-CPU generation-tagged handle.

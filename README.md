@@ -33,6 +33,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - SWAPGS-safe user-origin interrupt entry and validated CPL3 exception delivery probe
 - Bounded per-CPU kernel task queues with isolated guarded stacks and generation-safe handles
 - IPI wakeups, idle `hlt`, explicit task lifecycle, stack wiping, and cross-CPU execution tests
+- Scheduler-owned, per-CPU user-context binding with live process leases and generation-safe teardown
 - Capability-first kernel authority model with attenuation, revocation ancestry, typed objects, and pinned leases
 - Entropy-keyed 36-bit token authentication plus generational stale-handle rejection
 - Cross-domain capability delegation with rights attenuation and source-revocation ancestry
@@ -63,8 +64,8 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Automated disk and ISO smoke tests
 - 128 MiB low-memory and 5 GiB high-memory QEMU coverage
 
-Persistent user-mode scheduling, production syscall dispatch/return, preemptive scheduling,
-networking, general drivers, Secure Boot, and physical-hardware support are intentionally deferred.
+Persistent user-mode scheduling, arbitrary application dispatch, preemptive scheduling, networking,
+general drivers, Secure Boot, and physical-hardware support are intentionally deferred.
 
 ## Prerequisites
 

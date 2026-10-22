@@ -58,6 +58,12 @@ struct ProbeContext {
     u64 token;
 };
 
+struct CpuUserBinding {
+    sync::SpinLock lock;
+    process::AddressSpaceLease* context;
+    u32 generation = 1;
+};
+
 TaskSlot tasks[kMaximumTasks]{};
 RunQueue queues[64]{};
 sync::SpinLock task_lock{};
@@ -67,7 +73,10 @@ bool initialized = false;
 u64 submitted_tasks = 0;
 u64 completed_tasks = 0;
 u64 failed_tasks = 0;
+u64 user_context_binds = 0;
+u64 user_context_rejections = 0;
 ProbeContext probe_contexts[kMaximumTasks]{};
+CpuUserBinding user_bindings[64]{};
 u32 probe_counts[64]{};
 u32 probe_mismatch = 0;
 u64 probe_checksum = 0;
@@ -315,6 +324,58 @@ bool release(TaskHandle handle) {
 
 bool pump_one() { return run_one(arch::x86_64::smp::current_index()); }
 
+bool bind_user_context(process::AddressSpaceLease& context, UserContextBinding& binding) {
+    binding = {};
+    const u32 cpu = arch::x86_64::smp::current_index();
+    if (!initialized || !process::validate_address_space_lease(context) ||
+        arch::x86_64::interrupts::enabled() ||
+        cpu >= arch::x86_64::smp::processor_count()) {
+        __atomic_add_fetch(&user_context_rejections, 1ULL, __ATOMIC_RELAXED);
+        return false;
+    }
+    CpuUserBinding& state = user_bindings[cpu];
+    sync::LockGuard guard(state.lock);
+    if (state.context != nullptr || arch::x86_64::smp::current_syscall_context() != nullptr ||
+        !arch::x86_64::smp::bind_syscall_context(&context)) {
+        __atomic_add_fetch(&user_context_rejections, 1ULL, __ATOMIC_RELAXED);
+        return false;
+    }
+    state.context = &context;
+    binding = {
+        .context = &context,
+        .cpu = cpu,
+        .generation = state.generation,
+        .active = true,
+    };
+    __atomic_add_fetch(&user_context_binds, 1ULL, __ATOMIC_RELAXED);
+    return true;
+}
+
+bool unbind_user_context(UserContextBinding& binding) {
+    const u32 cpu = arch::x86_64::smp::current_index();
+    if (!initialized || !binding.active || binding.context == nullptr ||
+        arch::x86_64::interrupts::enabled() || cpu != binding.cpu ||
+        cpu >= arch::x86_64::smp::processor_count()) {
+        __atomic_add_fetch(&user_context_rejections, 1ULL, __ATOMIC_RELAXED);
+        return false;
+    }
+    CpuUserBinding& state = user_bindings[cpu];
+    sync::LockGuard guard(state.lock);
+    if (state.context != binding.context || state.generation != binding.generation ||
+        arch::x86_64::smp::current_syscall_context() != binding.context ||
+        !arch::x86_64::smp::unbind_syscall_context(binding.context)) {
+        __atomic_add_fetch(&user_context_rejections, 1ULL, __ATOMIC_RELAXED);
+        return false;
+    }
+    state.context = nullptr;
+    ++state.generation;
+    if (state.generation == 0) {
+        ++state.generation;
+    }
+    binding = {};
+    return true;
+}
+
 bool self_test() {
     if (!initialized) {
         last_failure = 4;
@@ -389,6 +450,33 @@ bool self_test() {
             return false;
         }
     }
+    last_failure = 11;
+    security::capability::DomainHandle binding_manager{};
+    process::CreateResult binding_process{};
+    process::AddressSpaceLease context_probe{};
+    UserContextBinding binding{};
+    UserContextBinding duplicate{};
+    if (!security::capability::create_domain(binding_manager) ||
+        !process::create(binding_manager, "scheduler-binding", binding_process) ||
+        !process::acquire_address_space(binding_manager, binding_process.control, context_probe) ||
+        !bind_user_context(context_probe, binding) ||
+        arch::x86_64::smp::current_syscall_context() != &context_probe ||
+        bind_user_context(context_probe, duplicate)) {
+        return false;
+    }
+    UserContextBinding forged = binding;
+    ++forged.generation;
+    if (unbind_user_context(forged) || !unbind_user_context(binding) || binding.active ||
+        arch::x86_64::smp::current_syscall_context() != nullptr) {
+        return false;
+    }
+    process::release_address_space(context_probe);
+    if (!process::terminate(binding_manager, binding_process.control, 0) ||
+        !process::destroy(binding_manager, binding_process.control) ||
+        !security::capability::destroy_domain(binding_manager)) {
+        return false;
+    }
+    last_failure = 0;
     return true;
 }
 
@@ -397,6 +485,9 @@ Statistics statistics() {
         .submitted = __atomic_load_n(&submitted_tasks, __ATOMIC_RELAXED),
         .completed = __atomic_load_n(&completed_tasks, __ATOMIC_RELAXED),
         .failed = __atomic_load_n(&failed_tasks, __ATOMIC_RELAXED),
+        .user_context_binds = __atomic_load_n(&user_context_binds, __ATOMIC_RELAXED),
+        .user_context_rejections =
+            __atomic_load_n(&user_context_rejections, __ATOMIC_RELAXED),
         .capacity = kMaximumTasks,
     };
 }

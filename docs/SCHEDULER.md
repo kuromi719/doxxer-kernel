@@ -26,6 +26,24 @@ FREE -> QUEUED -> RUNNING -> COMPLETE|FAILED -> FREE(new generation)
 
 Acquire/release atomics publish task descriptors and results. Only a successful compare-exchange from `QUEUED` to `RUNNING` grants execution ownership.
 
+## User execution context ownership
+
+The scheduler is the sole high-level owner of the process context installed for the runtime
+syscall and user-exception paths. A binding accepts a typed, currently valid
+`AddressSpaceLease`; arbitrary pointers and stale process leases cannot be installed as a
+CPU-local syscall context.
+
+Binding and unbinding require interrupts to be disabled, which pins the operation to the current
+processor until a future scheduler supplies an explicit migration protocol. Each CPU permits one
+active binding. The returned binding handle records the processor and a nonzero generation;
+teardown succeeds only on the same CPU and only when the handle, scheduler record, and low-level
+GS-backed context all agree. Duplicate binds, forged generations, stale handles, and cross-CPU
+unbind attempts fail closed without replacing the active context.
+
+The architecture-specific SMP layer remains a narrow mechanism for publishing the pointer in the
+CPU-local record. Runtime ring-3 probes and future dispatch code must use the scheduler interface,
+so process-lease validation and lifecycle accounting cannot be bypassed by ordinary callers.
+
 ## Validation
 
 The boot self-test submits multiple tasks explicitly targeted to every online processor. Each task validates its CPU-local index and contributes to per-CPU counters and a deterministic checksum. Boot requires:
@@ -36,6 +54,8 @@ The boot self-test submits multiple tasks explicitly targeted to every online pr
 - An exact aggregate checksum
 - Zero stack-canary failures
 - Successful generation-checked release of every handle
+- Successful typed user-context bind and same-CPU unbind
+- Rejection of duplicate binding and a forged-generation teardown handle
 
 Smoke coverage runs the scheduler with 1, 4, and 8 virtual processors, including 128 MiB and 5 GiB memory configurations.
 
@@ -46,5 +66,6 @@ Smoke coverage runs the scheduler with 1, 4, and 8 virtual processors, including
 - Priorities, deadlines, affinity masks, and work stealing
 - Blocking primitives and priority inheritance
 - Scheduler-aware TLB shootdowns
-- User-process address-space activation
+- Persistent user-thread dispatch and address-space activation
+- User-context migration and process-level fault termination
 - XSAVE/FPU context ownership

@@ -98,6 +98,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] USER EXCEPTION DELIVERY VERIFIED',
         '[OK] PER-CPU SCHEDULER ONLINE',
         '[OK] CROSS-CPU TASK SELF-TEST PASSED',
+        '[OK] SCHEDULER USER CONTEXT BINDING VERIFIED',
         '[OK] APIC TIMER ONLINE',
         '[OK] FRAMEBUFFER ONLINE',
         'DOXXER_BOOT_OK'

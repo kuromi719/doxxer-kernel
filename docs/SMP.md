@@ -27,6 +27,11 @@ The IDT and handler table are shared and installed before processors are release
 
 The `IA32_GS_BASE` MSR points at a cache-line-aligned CPU record and `IA32_KERNEL_GS_BASE` is cleared before a processor is published. Interrupt code validates the self pointer, bounded CPU index, and Local APIC ID before modifying CPU-local state. A user transition swaps the CPU record into `IA32_KERNEL_GS_BASE`; `SYSCALL` executes `SWAPGS` before reading the bound process pointer, saved user RSP, or guarded stack top. This avoids repeatedly scanning global topology in hot paths and keeps user-controlled GS state outside privileged addressing.
 
+The scheduler controls the process pointer installed in each CPU record. It accepts only a live,
+typed process address-space lease and requires interrupts disabled so the binding cannot migrate
+between validation and publication. A per-CPU generation-tagged handle enforces single ownership
+and same-CPU teardown; duplicate, stale, forged, or mismatched unbind operations fail closed.
+
 ## Publication and ordering
 
 CPU records and mappings are completed before the MP `goto_address` is published with release ordering. Secondary status transitions use release stores; the bootstrap processor observes them with acquire loads. Startup is successful only when every discovered processor reaches the online state before a one-second HPET deadline.
