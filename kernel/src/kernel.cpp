@@ -17,6 +17,7 @@
 #include <doxxer/process/process.hpp>
 #include <doxxer/scheduler/scheduler.hpp>
 #include <doxxer/security/capability.hpp>
+#include <doxxer/security/image_policy.hpp>
 #include <doxxer/service/registry.hpp>
 #include <doxxer/sync/event.hpp>
 #include <doxxer/syscall/dispatcher.hpp>
@@ -145,6 +146,12 @@ namespace {
     log::write("\n");
     log::success("VALIDATED USER MEMORY ACCESS ONLINE");
 
+    if (!security::image_policy::initialize() || !security::image_policy::self_test()) {
+        log::write("[ERROR] IMAGE POLICY SELF-TEST STAGE: ");
+        log::write_decimal(security::image_policy::failure_code());
+        log::write("\n");
+        panic("IMAGE TRUST POLICY INITIALIZATION FAILED");
+    }
     if (!loader::elf64::self_test()) {
         log::write("[ERROR] ELF64 LOADER SELF-TEST STAGE: ");
         log::write_decimal(loader::elf64::failure_code());
@@ -156,6 +163,17 @@ namespace {
     log::write_decimal(loader_stats.mapped_pages);
     log::write("\n");
     log::success("HARDENED ELF64 LOADER ONLINE");
+    if (!security::image_policy::is_sealed()) {
+        panic("IMAGE TRUST POLICY NOT SEALED");
+    }
+    const security::image_policy::Statistics image_policy_stats =
+        security::image_policy::statistics();
+    log::write("[INFO] TRUSTED IMAGE DIGESTS: ");
+    log::write_decimal(image_policy_stats.trusted_images);
+    log::write(" / REJECTIONS: ");
+    log::write_decimal(image_policy_stats.rejected_images);
+    log::write("\n");
+    log::success("SEALED IMAGE TRUST POLICY ONLINE");
 
     if (!thread::user::initialize() || !thread::user::self_test()) {
         log::write("[ERROR] USER THREAD SELF-TEST STAGE: ");

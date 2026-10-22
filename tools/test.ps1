@@ -64,6 +64,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] CAPABILITY SERVICE REGISTRY ONLINE',
         '[OK] VALIDATED USER MEMORY ACCESS ONLINE',
         '[OK] HARDENED ELF64 LOADER ONLINE',
+        '[OK] SEALED IMAGE TRUST POLICY ONLINE',
         '[OK] GUARDED USER THREAD CONTEXTS ONLINE',
         '[OK] ACPI TABLES VALIDATED',
         '[OK] LOCAL APIC ONLINE',

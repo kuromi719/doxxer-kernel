@@ -44,6 +44,7 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 - Kernel task dispatch uses bounded per-CPU queues and a fixed task pool rather than attacker-controlled dynamic queue growth. Every task executes on a dedicated supervisor-only NX stack with unmapped boundary guards, a keyed layout canary, and full stack wiping between uses.
 - Task handles include generations to reject stale release/completion operations. Queue and lifecycle publication use locks plus acquire/release atomics, while IPI wakeups carry no caller-controlled function pointer.
 - Kernel authority is represented by typed, rights-limited capabilities rather than ambient global handles. Derived capabilities cannot gain rights, and revoking any ancestor invalidates its entire descendant chain without a global scan.
+- Executable images are copied into bounded kernel-owned snapshots, measured with SHA-256, and admitted only when their digest was enrolled before the image policy was irreversibly sealed. Unknown or post-seal enrollment attempts fail closed.
 - Capability tokens combine a slot, a 22-bit generation, and an entropy-keyed 36-bit authentication tag. Tokens are validated against their domain nonce, complete metadata, parent chain, object type, and required rights before use.
 - Object access returns a pinned lease. Destruction fails while leases exist, preventing capability validation from becoming a time-of-check/time-of-use pointer race.
 - Serial panic diagnostics followed by an interrupt-disabled halt.
@@ -52,11 +53,11 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 
 - Physical attackers and evil-maid attacks.
 - Malicious firmware, hypervisor, bootloader, compiler, or hardware.
-- Secure Boot, measured boot, TPM attestation, and disk encryption.
+- Secure Boot, TPM attestation, and disk encryption. Kernel-side executable measurement is now present, but firmware-to-kernel authenticity is not yet established.
 - Side-channel resistance.
 - Isolation between applications, because user mode does not yet exist.
 - Capability authentication is defense in depth for kernel handles, not a substitute for syscall-boundary isolation or cryptographic authentication across machines.
 
 ## Planned direction
 
-Future milestones should rebuild inherited kernel mappings with section-granular permissions, add per-device interrupt routing and preemptive threads, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Allocator hardening does not make memory-unsafe kernel code safe; detected corruption still requires a fail-closed caller policy. Each milestone must update this document before expanding the trusted computing base.
+Future milestones should replace prototype boot-time digest enrollment with an offline-signed Doxxer manifest and embedded public trust root, connect it to Secure Boot and measured boot, rebuild inherited kernel mappings with section-granular permissions, add per-device interrupt routing and preemptive threads, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Allocator hardening does not make memory-unsafe kernel code safe; detected corruption still requires a fail-closed caller policy. Each milestone must update this document before expanding the trusted computing base.

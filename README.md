@@ -38,6 +38,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Capability service registry with validated names and revocable attenuated resolution
 - Page-aware user-memory validation and bounded copy helpers with no user-pointer dereference
 - Strict ELF64 loader with transactional rollback, W^X segments, and zeroed BSS
+- Closed-by-default executable policy with SHA-256 measurements and irreversible boot-time sealing
 - Capability-owned user-thread contexts with pinned process spaces and guarded stacks
 - Immutable supervisor stack windows shared into processes without user accessibility or ownership
 - W^X-compatible ELF segments and non-executable stack

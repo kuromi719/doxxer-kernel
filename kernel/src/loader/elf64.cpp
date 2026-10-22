@@ -1,7 +1,9 @@
 #include <doxxer/loader/elf64.hpp>
 
+#include <doxxer/memory/heap.hpp>
 #include <doxxer/memory/physical.hpp>
 #include <doxxer/memory/user_copy.hpp>
+#include <doxxer/security/image_policy.hpp>
 
 namespace doxxer::loader::elf64 {
 namespace {
@@ -12,6 +14,7 @@ constexpr u32 kFlagRead = 4;
 constexpr u64 kMinimumUserAddress = 0x1'0000ULL;
 constexpr u64 kMaximumUserAddress = 0x0000'7FFF'FFFF'FFFFULL;
 constexpr u16 kMaximumProgramHeaders = 16;
+constexpr usize kMaximumImageBytes = 2 * 1024 * 1024;
 
 struct ElfHeader {
     u8 identity[16];
@@ -43,6 +46,35 @@ struct ProgramHeader {
 
 static_assert(sizeof(ElfHeader) == 64);
 static_assert(sizeof(ProgramHeader) == 56);
+
+class Snapshot final {
+  public:
+    Snapshot() = default;
+    ~Snapshot() {
+        if (bytes_ != nullptr) {
+            (void)memory::heap::deallocate(bytes_);
+        }
+    }
+    Snapshot(const Snapshot&) = delete;
+    Snapshot& operator=(const Snapshot&) = delete;
+
+    bool capture(const void* source, usize size) {
+        bytes_ = static_cast<u8*>(memory::heap::allocate(size, alignof(ElfHeader)));
+        if (bytes_ == nullptr) {
+            return false;
+        }
+        const auto* source_bytes = static_cast<const u8*>(source);
+        for (usize index = 0; index < size; ++index) {
+            bytes_[index] = source_bytes[index];
+        }
+        return true;
+    }
+
+    const u8* bytes() const { return bytes_; }
+
+  private:
+    u8* bytes_ = nullptr;
+};
 
 u64 loaded_images = 0;
 u64 unloaded_images = 0;
@@ -145,12 +177,18 @@ bool equal_bytes(const u8* left, const u8* right, usize length) {
 bool load(memory::virtual_memory::AddressSpace& space, const void* data, usize size,
           Image& image) {
     image = {};
-    if (!space.valid() || data == nullptr ||
-        reinterpret_cast<uptr>(data) % alignof(ElfHeader) != 0 || size < sizeof(ElfHeader)) {
+    if (!space.valid() || data == nullptr || size < sizeof(ElfHeader) ||
+        size > kMaximumImageBytes) {
         reject();
         return false;
     }
-    const auto* bytes = static_cast<const u8*>(data);
+    Snapshot snapshot{};
+    if (!snapshot.capture(data, size) ||
+        !security::image_policy::authorize(snapshot.bytes(), size)) {
+        reject();
+        return false;
+    }
+    const u8* bytes = snapshot.bytes();
     const auto* header = reinterpret_cast<const ElfHeader*>(bytes);
     if (!header_valid(*header, size)) {
         reject();
@@ -321,9 +359,35 @@ bool self_test() {
         blob[0x2000 + index] = data[index];
     }
 
+    if (!security::image_policy::enroll(blob, sizeof(blob))) {
+        last_failure = 7;
+        return false;
+    }
+    programs[0].flags = kFlagRead | kFlagWrite | kFlagExecute;
+    if (!security::image_policy::enroll(blob, sizeof(blob))) {
+        last_failure = 8;
+        return false;
+    }
+    programs[0].flags = kFlagRead | kFlagExecute;
+    if (!security::image_policy::seal() || !security::image_policy::is_sealed() ||
+        security::image_policy::enroll(blob, sizeof(blob))) {
+        last_failure = 9;
+        return false;
+    }
+
     memory::virtual_memory::AddressSpace space{};
     Image image{};
-    if (!memory::virtual_memory::create(space, 32) || !load(space, blob, sizeof(blob), image) ||
+    if (!memory::virtual_memory::create(space, 32)) {
+        last_failure = 10;
+        return false;
+    }
+    blob[sizeof(blob) - 1] = 0xA5;
+    if (load(space, blob, sizeof(blob), image)) {
+        last_failure = 11;
+        return false;
+    }
+    blob[sizeof(blob) - 1] = 0;
+    if (!load(space, blob, sizeof(blob), image) ||
         image.entry_point != 0x40'0000 || image.page_count != 2) {
         last_failure = 1;
         return false;
