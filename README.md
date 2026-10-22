@@ -37,6 +37,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Pointer-free versioned syscall request ABI for IPC, events, and process control
 - Capability service registry with validated names and revocable attenuated resolution
 - Page-aware user-memory validation and bounded copy helpers with no user-pointer dereference
+- Strict ELF64 loader with transactional rollback, W^X segments, and zeroed BSS
 - W^X-compatible ELF segments and non-executable stack
 - Bootable GPT/FAT disk image and UEFI ISO
 - Automated disk and ISO smoke tests
@@ -103,6 +104,7 @@ See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
 [`docs/SYSCALL_ABI.md`](docs/SYSCALL_ABI.md) for the versioned syscall contract,
 [`docs/SERVICES.md`](docs/SERVICES.md) for capability-oriented service discovery,
 [`docs/USER_MEMORY.md`](docs/USER_MEMORY.md) for safe address-space copy rules,
+[`docs/ELF_LOADER.md`](docs/ELF_LOADER.md) for executable validation and mapping,
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the initial threat model, and
 [`SECURITY.md`](SECURITY.md) for reporting guidance.
 

@@ -6,6 +6,7 @@
 #include <doxxer/firmware/acpi.hpp>
 #include <doxxer/graphics/framebuffer.hpp>
 #include <doxxer/ipc/channel.hpp>
+#include <doxxer/loader/elf64.hpp>
 #include <doxxer/log.hpp>
 #include <doxxer/memory/heap.hpp>
 #include <doxxer/memory/physical.hpp>
@@ -142,6 +143,18 @@ namespace {
     log::write_decimal(copy_stats.bytes_copied);
     log::write("\n");
     log::success("VALIDATED USER MEMORY ACCESS ONLINE");
+
+    if (!loader::elf64::self_test()) {
+        log::write("[ERROR] ELF64 LOADER SELF-TEST STAGE: ");
+        log::write_decimal(loader::elf64::failure_code());
+        log::write("\n");
+        panic("ELF64 LOADER SELF-TEST FAILED");
+    }
+    const loader::elf64::Statistics loader_stats = loader::elf64::statistics();
+    log::write("[INFO] ELF64 IMAGE PAGES VERIFIED: ");
+    log::write_decimal(loader_stats.mapped_pages);
+    log::write("\n");
+    log::success("HARDENED ELF64 LOADER ONLINE");
 
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");
