@@ -6,6 +6,9 @@
 
 extern "C" [[noreturn]] void
 doxxer_run_on_stack(doxxer::u64 stack_top, doxxer::arch::x86_64::protection::KernelEntry entry);
+extern "C" [[noreturn]] void
+doxxer_run_on_cpu_stack(doxxer::u64 root_physical, doxxer::u64 stack_top,
+                        doxxer::arch::x86_64::protection::CpuEntry entry, void* argument);
 
 namespace doxxer::arch::x86_64::protection {
 namespace {
@@ -210,5 +213,14 @@ bool on_kernel_stack() {
         }
     }
     doxxer_run_on_stack(kernel_stack.top(), entry);
+}
+
+[[noreturn]] void enter_cpu_stack(u64 stack_top, CpuEntry entry, void* argument) {
+    if (!initialized || stack_top == 0 || entry == nullptr) {
+        for (;;) {
+            asm volatile("cli; hlt");
+        }
+    }
+    doxxer_run_on_cpu_stack(kernel_space.root_physical(), stack_top, entry, argument);
 }
 }

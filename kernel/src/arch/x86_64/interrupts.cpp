@@ -162,6 +162,10 @@ void initialize() {
             .reserved = 0,
         };
     }
+    load();
+}
+
+void load() {
     const DescriptorTablePointer pointer{
         .limit = static_cast<u16>(sizeof(idt) - 1),
         .base = reinterpret_cast<u64>(&idt[0]),

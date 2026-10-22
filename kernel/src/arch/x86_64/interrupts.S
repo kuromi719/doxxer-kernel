@@ -83,6 +83,21 @@ doxxer_run_on_stack:
     hlt
     jmp .Lstack_returned
 
+.global doxxer_run_on_cpu_stack
+.type doxxer_run_on_cpu_stack, @function
+doxxer_run_on_cpu_stack:
+    cli
+    movq %rdi, %cr3
+    movq %rsi, %rsp
+    andq $-16, %rsp
+    xorq %rbp, %rbp
+    movq %rcx, %rdi
+    callq *%rdx
+.Lcpu_stack_returned:
+    cli
+    hlt
+    jmp .Lcpu_stack_returned
+
 .section .rodata
 .align 8
 .global doxxer_isr_table

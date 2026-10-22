@@ -19,6 +19,7 @@ constexpr u8 kTimerVector = 0xE0;
 constexpr u8 kSpuriousVector = 0xFF;
 constexpr u64 kCalibrationFemtoseconds = 10'000'000'000'000ULL;
 constexpr u64 kTestTimeoutFemtoseconds = 250'000'000'000'000ULL;
+constexpr u64 kIpiTimeoutMicroseconds = 100'000;
 
 volatile u32* local_apic = nullptr;
 volatile u64* hpet_capabilities = nullptr;
@@ -163,6 +164,18 @@ bool calibrate_timer() {
     lapic_write(0x380, elapsed);
     return true;
 }
+
+bool wait_icr_idle() {
+    const u64 start = reference_counter();
+    const u64 timeout = reference_ticks_for_microseconds(kIpiTimeoutMicroseconds);
+    while ((lapic_read(0x300) & (1U << 12U)) != 0) {
+        if (reference_counter() - start >= timeout) {
+            return false;
+        }
+        asm volatile("pause");
+    }
+    return true;
+}
 }
 
 bool initialize(const firmware::acpi::Topology& topology) {
@@ -220,6 +233,44 @@ bool initialize(const firmware::acpi::Topology& topology) {
         return false;
     }
     return true;
+}
+
+bool initialize_secondary(u32 expected_apic_id) {
+    interrupts::disable();
+    const u64 apic_msr = read_msr(kApicBaseMsr);
+    if ((apic_msr & (1ULL << 11U)) == 0 || (apic_msr & (1ULL << 10U)) != 0 ||
+        current_id() != expected_apic_id) {
+        return false;
+    }
+    lapic_write(0x80, 0);
+    lapic_write(0x320, 1U << 16U);
+    lapic_write(0x350, 1U << 16U);
+    lapic_write(0x360, 1U << 16U);
+    lapic_write(0x370, 1U << 16U);
+    lapic_write(0xF0, (1U << 8U) | kSpuriousVector);
+    return true;
+}
+
+u32 current_id() { return lapic_read(0x20) >> 24U; }
+
+void eoi() { lapic_write(0xB0, 0); }
+
+bool send_ipi(u32 destination_apic_id, u8 vector) {
+    if (destination_apic_id > 0xFF || vector < 32 || !wait_icr_idle()) {
+        return false;
+    }
+    lapic_write(0x310, destination_apic_id << 24U);
+    lapic_write(0x300, vector);
+    return wait_icr_idle();
+}
+
+u64 reference_counter() { return hpet_counter == nullptr ? 0 : hpet_read_counter(); }
+
+u64 reference_ticks_for_microseconds(u64 microseconds) {
+    if (hpet_period_fs == 0 || microseconds > 18'446'744'073ULL) {
+        return 0;
+    }
+    return (microseconds * 1'000'000'000ULL) / hpet_period_fs;
 }
 
 bool timer_self_test() {

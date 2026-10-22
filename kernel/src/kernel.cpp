@@ -1,6 +1,7 @@
 #include <doxxer/arch/x86_64/apic.hpp>
 #include <doxxer/arch/x86_64/protection.hpp>
 #include <doxxer/arch/x86_64/serial.hpp>
+#include <doxxer/arch/x86_64/smp.hpp>
 #include <doxxer/boot/requests.hpp>
 #include <doxxer/firmware/acpi.hpp>
 #include <doxxer/graphics/framebuffer.hpp>
@@ -62,6 +63,25 @@ namespace {
     }
     log::success("LOCAL APIC ONLINE");
     log::success("IOAPIC MASKED");
+    if (!arch::x86_64::smp::initialize(boot::mp_request.response, *topology)) {
+        log::write("[ERROR] SMP FAILURE STAGE: ");
+        log::write_decimal(arch::x86_64::smp::failure_code());
+        log::write("\n");
+        panic("SMP INITIALIZATION FAILED");
+    }
+    log::write("[INFO] SMP PROCESSORS ONLINE: ");
+    log::write_decimal(arch::x86_64::smp::online_processor_count());
+    log::write(" / DISCOVERED: ");
+    log::write_decimal(arch::x86_64::smp::processor_count());
+    log::write("\n");
+    log::success("PER-CPU RUNTIME ONLINE");
+    if (!arch::x86_64::smp::self_test()) {
+        log::write("[ERROR] SMP SELF-TEST STAGE: ");
+        log::write_decimal(arch::x86_64::smp::failure_code());
+        log::write("\n");
+        panic("SMP IPI SELF-TEST FAILED");
+    }
+    log::success("SMP IPI SELF-TEST PASSED");
     if (!arch::x86_64::apic::timer_self_test()) {
         log::write("[ERROR] APIC TIMER FAILURE STAGE: ");
         log::write_decimal(arch::x86_64::apic::failure_code());

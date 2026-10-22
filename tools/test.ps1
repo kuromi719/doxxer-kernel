@@ -16,7 +16,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
     Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $errorLog -ErrorAction SilentlyContinue
     $args = @(
-        '-machine','q35','-m',$Memory,'-display','none','-monitor','none',
+        '-machine','q35','-smp','4','-m',$Memory,'-display','none','-monitor','none',
         '-drive',"if=pflash,format=raw,readonly=on,file=$firmware",
         '-serial',"file:$log",'-no-reboot',
         '-device','isa-debug-exit'
@@ -58,6 +58,8 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] ACPI TABLES VALIDATED',
         '[OK] LOCAL APIC ONLINE',
         '[OK] IOAPIC MASKED',
+        '[OK] PER-CPU RUNTIME ONLINE',
+        '[OK] SMP IPI SELF-TEST PASSED',
         '[OK] APIC TIMER ONLINE',
         '[OK] FRAMEBUFFER ONLINE',
         'DOXXER_BOOT_OK'

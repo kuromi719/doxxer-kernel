@@ -31,6 +31,7 @@ struct ExceptionFrame {
 using Handler = void (*)(ExceptionFrame& frame);
 
 void initialize();
+void load();
 bool self_test(u64 guard_address, u64 exception_stack_bottom, u64 exception_stack_top);
 bool register_handler(u8 vector, Handler handler);
 void enable();

@@ -1,0 +1,365 @@
+#include <doxxer/arch/x86_64/smp.hpp>
+
+#include <doxxer/arch/x86_64/apic.hpp>
+#include <doxxer/arch/x86_64/interrupts.hpp>
+#include <doxxer/arch/x86_64/protection.hpp>
+#include <doxxer/memory/physical.hpp>
+#include <doxxer/memory/virtual.hpp>
+
+namespace doxxer::arch::x86_64::smp {
+namespace {
+using memory::physical::kPageSize;
+using memory::virtual_memory::MapFlags;
+
+constexpr usize kMaximumProcessors = 64;
+constexpr u64 kStackPages = 8;
+constexpr u64 kCpuArenaBase = 0x0000'7200'0000'0000ULL;
+constexpr u64 kCpuArenaStride = 0x0100'0000ULL;
+constexpr u64 kExceptionStackOffset = 0x0010'0000ULL;
+constexpr u64 kEmergencyStackOffset = 0x0020'0000ULL;
+constexpr u64 kStartupTimeoutMicroseconds = 1'000'000;
+constexpr u64 kIpiTimeoutMicroseconds = 250'000;
+constexpr u16 kTaskStateSelector = 0x28;
+constexpr u8 kProbeVector = 0xE1;
+constexpr u32 kGsBaseMsr = 0xC000'0101U;
+
+enum class CpuStatus : u32 {
+    offline = 0,
+    launching = 1,
+    online = 2,
+    failed = 3,
+};
+
+struct StackMapping {
+    u64 virtual_base;
+    u64 physical_base;
+    u64 mapped_pages;
+
+    u64 top() const { return virtual_base + (kStackPages + 1) * kPageSize; }
+};
+
+struct [[gnu::packed]] TaskStateSegment {
+    u32 reserved0;
+    u64 rsp0;
+    u64 rsp1;
+    u64 rsp2;
+    u64 reserved1;
+    u64 ist1;
+    u64 ist2;
+    u64 ist3;
+    u64 ist4;
+    u64 ist5;
+    u64 ist6;
+    u64 ist7;
+    u64 reserved2;
+    u16 reserved3;
+    u16 io_map_base;
+};
+
+struct [[gnu::packed]] DescriptorTablePointer {
+    u16 limit;
+    u64 base;
+};
+
+struct alignas(64) CpuState {
+    CpuState* self;
+    u32 index;
+    u32 processor_id;
+    u32 apic_id;
+    u32 status;
+    u32 ipi_probes;
+    StackMapping kernel_stack;
+    StackMapping exception_stack;
+    StackMapping emergency_stack;
+    alignas(16) u64 gdt[7];
+    alignas(16) TaskStateSegment tss;
+};
+
+static_assert(sizeof(TaskStateSegment) == 104);
+static_assert(sizeof(DescriptorTablePointer) == 10);
+
+alignas(64) CpuState cpus[kMaximumProcessors]{};
+u32 discovered_processors = 0;
+u32 last_failure = 0;
+bool initialized = false;
+
+void write_gs_base(CpuState* cpu) {
+    const u64 value = reinterpret_cast<u64>(cpu);
+    asm volatile("wrmsr"
+                 :
+                 : "c"(kGsBaseMsr), "a"(static_cast<u32>(value)),
+                   "d"(static_cast<u32>(value >> 32U))
+                 : "memory");
+}
+
+CpuState* current_cpu() {
+    CpuState* cpu = nullptr;
+    asm volatile("movq %%gs:0, %0" : "=r"(cpu));
+    return cpu;
+}
+
+[[noreturn]] void halt_cpu() {
+    for (;;) {
+        asm volatile("cli; hlt");
+    }
+}
+
+bool map_stack(StackMapping& stack, u64 virtual_base) {
+    stack.virtual_base = virtual_base;
+    if (!memory::physical::allocate_contiguous(kStackPages, 1, stack.physical_base)) {
+        return false;
+    }
+    auto* space = memory::virtual_memory::active_address_space();
+    if (space == nullptr) {
+        return false;
+    }
+    for (u64 index = 0; index < kStackPages; ++index) {
+        if (!memory::virtual_memory::map(*space, virtual_base + (index + 1) * kPageSize,
+                                         stack.physical_base + index * kPageSize,
+                                         MapFlags::write)) {
+            return false;
+        }
+        ++stack.mapped_pages;
+    }
+    return true;
+}
+
+bool prepare_cpu_stacks(CpuState& cpu, usize index) {
+    const u64 base = kCpuArenaBase + index * kCpuArenaStride;
+    return map_stack(cpu.kernel_stack, base) &&
+           map_stack(cpu.exception_stack, base + kExceptionStackOffset) &&
+           map_stack(cpu.emergency_stack, base + kEmergencyStackOffset);
+}
+
+void install_descriptors(CpuState& cpu) {
+    cpu.tss.rsp0 = cpu.kernel_stack.top();
+    cpu.tss.ist1 = cpu.exception_stack.top();
+    cpu.tss.ist2 = cpu.emergency_stack.top();
+    cpu.tss.io_map_base = sizeof(TaskStateSegment);
+
+    cpu.gdt[0] = 0;
+    cpu.gdt[1] = 0x00AF'9A00'0000'FFFFULL;
+    cpu.gdt[2] = 0x00CF'9200'0000'FFFFULL;
+    cpu.gdt[3] = 0x00CF'F200'0000'FFFFULL;
+    cpu.gdt[4] = 0x00AF'FA00'0000'FFFFULL;
+    const u64 base = reinterpret_cast<u64>(&cpu.tss);
+    constexpr u64 limit = sizeof(TaskStateSegment) - 1;
+    cpu.gdt[5] = (limit & 0xFFFFU) | ((base & 0xFF'FFFFU) << 16U) | (0x89ULL << 40U) |
+                 (((limit >> 16U) & 0xFU) << 48U) | (((base >> 24U) & 0xFFU) << 56U);
+    cpu.gdt[6] = base >> 32U;
+
+    const DescriptorTablePointer pointer{
+        .limit = static_cast<u16>(sizeof(cpu.gdt) - 1),
+        .base = reinterpret_cast<u64>(&cpu.gdt[0]),
+    };
+    asm volatile("lgdt %0\n\t"
+                 "pushq $0x08\n\t"
+                 "leaq 1f(%%rip), %%rax\n\t"
+                 "pushq %%rax\n\t"
+                 "lretq\n\t"
+                 "1:\n\t"
+                 "movw $0x10, %%ax\n\t"
+                 "movw %%ax, %%ds\n\t"
+                 "movw %%ax, %%es\n\t"
+                 "movw %%ax, %%ss\n\t"
+                 "xorw %%ax, %%ax\n\t"
+                 "movw %%ax, %%fs\n\t"
+                 "movw %%ax, %%gs\n\t"
+                 :
+                 : "m"(pointer)
+                 : "rax", "memory");
+    const u16 selector = kTaskStateSelector;
+    asm volatile("ltr %0" : : "r"(selector) : "memory");
+    interrupts::load();
+}
+
+void probe_handler(interrupts::ExceptionFrame&) {
+    CpuState* cpu = current_cpu();
+    if (cpu != nullptr && cpu->self == cpu && cpu->index < discovered_processors &&
+        cpu->apic_id == apic::current_id()) {
+        __atomic_add_fetch(&cpu->ipi_probes, 1U, __ATOMIC_RELAXED);
+    }
+    apic::eoi();
+}
+
+[[noreturn]] void secondary_main(void* argument) {
+    auto* cpu = static_cast<CpuState*>(argument);
+    install_descriptors(*cpu);
+    write_gs_base(cpu);
+    if (!apic::initialize_secondary(cpu->apic_id)) {
+        __atomic_store_n(&cpu->status, static_cast<u32>(CpuStatus::failed), __ATOMIC_RELEASE);
+        halt_cpu();
+    }
+    __atomic_store_n(&cpu->status, static_cast<u32>(CpuStatus::online), __ATOMIC_RELEASE);
+    interrupts::enable();
+    for (;;) {
+        asm volatile("hlt");
+    }
+}
+
+extern "C" __attribute__((no_stack_protector)) [[noreturn]] void
+doxxer_secondary_entry(limine_mp_info* info) {
+    if (info == nullptr || info->extra_argument >= discovered_processors) {
+        halt_cpu();
+    }
+    CpuState& cpu = cpus[info->extra_argument];
+    if (cpu.processor_id != info->processor_id || cpu.apic_id != info->lapic_id) {
+        __atomic_store_n(&cpu.status, static_cast<u32>(CpuStatus::failed), __ATOMIC_RELEASE);
+        halt_cpu();
+    }
+    protection::enter_cpu_stack(cpu.kernel_stack.top(), secondary_main, &cpu);
+}
+
+bool deadline_reached(u64 start, u64 timeout_microseconds) {
+    const u64 ticks = apic::reference_ticks_for_microseconds(timeout_microseconds);
+    return ticks == 0 || apic::reference_counter() - start >= ticks;
+}
+}
+
+bool initialize(const volatile limine_mp_response* response,
+                const firmware::acpi::Topology& topology) {
+    initialized = false;
+    last_failure = 0;
+    if (response == nullptr || response->cpus == nullptr || response->cpu_count == 0 ||
+        response->cpu_count > kMaximumProcessors ||
+        (response->flags & LIMINE_MP_RESPONSE_X86_64_X2APIC) != 0) {
+        last_failure = 1;
+        return false;
+    }
+    if (response->cpu_count != topology.enabled_processors ||
+        response->bsp_lapic_id != topology.bootstrap_apic_id) {
+        last_failure = 2;
+        return false;
+    }
+    discovered_processors = static_cast<u32>(response->cpu_count);
+    bool bsp_found = false;
+    CpuState* bsp = nullptr;
+    for (u32 index = 0; index < discovered_processors; ++index) {
+        limine_mp_info* info = response->cpus[index];
+        if (info == nullptr || info->lapic_id > 0xFF) {
+            last_failure = 3;
+            return false;
+        }
+        for (u32 previous = 0; previous < index; ++previous) {
+            if (cpus[previous].apic_id == info->lapic_id ||
+                cpus[previous].processor_id == info->processor_id) {
+                last_failure = 4;
+                return false;
+            }
+        }
+        cpus[index].self = &cpus[index];
+        cpus[index].index = index;
+        cpus[index].processor_id = info->processor_id;
+        cpus[index].apic_id = info->lapic_id;
+        cpus[index].ipi_probes = 0;
+        if (info->lapic_id == response->bsp_lapic_id) {
+            bsp_found = true;
+            bsp = &cpus[index];
+            cpus[index].status = static_cast<u32>(CpuStatus::online);
+        } else {
+            cpus[index].status = static_cast<u32>(CpuStatus::launching);
+            if (!prepare_cpu_stacks(cpus[index], index)) {
+                last_failure = 5;
+                return false;
+            }
+        }
+    }
+    if (!bsp_found || !interrupts::register_handler(kProbeVector, probe_handler)) {
+        last_failure = 6;
+        return false;
+    }
+    write_gs_base(bsp);
+
+    for (u32 index = 0; index < discovered_processors; ++index) {
+        limine_mp_info* info = response->cpus[index];
+        if (info->lapic_id == response->bsp_lapic_id) {
+            continue;
+        }
+        __atomic_store_n(&info->extra_argument, static_cast<u64>(index), __ATOMIC_RELAXED);
+        __atomic_store_n(&info->goto_address, doxxer_secondary_entry, __ATOMIC_RELEASE);
+    }
+
+    const u64 start = apic::reference_counter();
+    while (online_processor_count() != discovered_processors) {
+        for (u32 index = 0; index < discovered_processors; ++index) {
+            if (__atomic_load_n(&cpus[index].status, __ATOMIC_ACQUIRE) ==
+                static_cast<u32>(CpuStatus::failed)) {
+                last_failure = 7;
+                return false;
+            }
+        }
+        if (deadline_reached(start, kStartupTimeoutMicroseconds)) {
+            last_failure = 8;
+            return false;
+        }
+        asm volatile("pause");
+    }
+    initialized = true;
+    return true;
+}
+
+bool self_test() {
+    if (!initialized) {
+        last_failure = 9;
+        return false;
+    }
+    CpuState* bsp = current_cpu();
+    if (bsp == nullptr || bsp->self != bsp || bsp->index >= discovered_processors ||
+        bsp->apic_id != apic::current_id()) {
+        last_failure = 12;
+        return false;
+    }
+    u32 before[kMaximumProcessors]{};
+    const u32 bsp_id = apic::current_id();
+    for (u32 index = 0; index < discovered_processors; ++index) {
+        before[index] = __atomic_load_n(&cpus[index].ipi_probes, __ATOMIC_RELAXED);
+        if (cpus[index].apic_id != bsp_id && !apic::send_ipi(cpus[index].apic_id, kProbeVector)) {
+            last_failure = 10;
+            return false;
+        }
+    }
+    const u64 start = apic::reference_counter();
+    for (;;) {
+        bool complete = true;
+        for (u32 index = 0; index < discovered_processors; ++index) {
+            if (cpus[index].apic_id != bsp_id &&
+                __atomic_load_n(&cpus[index].ipi_probes, __ATOMIC_ACQUIRE) == before[index]) {
+                complete = false;
+            }
+        }
+        if (complete) {
+            return true;
+        }
+        if (deadline_reached(start, kIpiTimeoutMicroseconds)) {
+            last_failure = 11;
+            return false;
+        }
+        asm volatile("pause");
+    }
+}
+
+u32 processor_count() { return discovered_processors; }
+
+u32 online_processor_count() {
+    u32 count = 0;
+    for (u32 index = 0; index < discovered_processors; ++index) {
+        if (__atomic_load_n(&cpus[index].status, __ATOMIC_ACQUIRE) ==
+            static_cast<u32>(CpuStatus::online)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+u32 current_processor_id() {
+    CpuState* cpu = current_cpu();
+    return cpu == nullptr || cpu->self != cpu ? 0xFFFF'FFFFU : cpu->processor_id;
+}
+
+u32 current_apic_id() {
+    CpuState* cpu = current_cpu();
+    return cpu == nullptr || cpu->self != cpu ? 0xFFFF'FFFFU : cpu->apic_id;
+}
+
+u32 failure_code() { return last_failure; }
+}

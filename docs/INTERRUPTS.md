@@ -25,13 +25,13 @@ I/O APIC inputs remain masked in this milestone. Device-specific routing will be
 
 CPU exceptions remain fatal unless they are part of an explicit boot self-test. Vectors 32–255 may return only when a kernel handler was registered while interrupts were disabled. Unregistered external vectors use the same register-rich fatal path as unexpected exceptions.
 
-All vectors currently use an IST-backed interrupt frame. NMI, double fault, and machine check retain the separate emergency IST. The timer handler performs only a tick increment and Local APIC EOI; it does not allocate, log, or take heap locks.
+All vectors currently use an IST-backed interrupt frame. NMI, double fault, and machine check retain the separate emergency IST. Every online processor has private TSS/IST stacks while sharing the immutable IDT. The timer handler performs only a tick increment and Local APIC EOI; it does not allocate, log, or take heap locks.
 
 ## Deferred work
 
 - Per-device I/O APIC routing and interrupt ownership
 - MSI/MSI-X allocation and interrupt remapping
-- SMP Local APIC startup and per-CPU timer state
+- Per-CPU timer state and deadline timers
 - TSC-deadline mode and invariant-TSC timekeeping
 - Power-management ACPI AML execution
 - Physical-hardware quirk handling
