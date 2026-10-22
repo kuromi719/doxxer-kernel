@@ -1,6 +1,7 @@
 #pragma once
 
 #include <doxxer/ipc/channel.hpp>
+#include <doxxer/process/process.hpp>
 #include <doxxer/security/capability.hpp>
 #include <doxxer/types.hpp>
 
@@ -46,11 +47,15 @@ struct Statistics {
     u64 dispatched;
     u64 successful;
     u64 rejected;
+    u64 user_entries;
+    u64 user_copy_rejections;
 };
 
 bool initialize();
 Status dispatch(security::capability::DomainHandle caller, const Request& request,
                 Response& response);
+Status dispatch_user(process::AddressSpaceLease& caller, u64 user_request,
+                     u64 user_response);
 bool self_test();
 Statistics statistics();
 u32 failure_code();

@@ -42,6 +42,7 @@ struct Statistics {
 struct AddressSpaceLease {
     memory::virtual_memory::AddressSpace* space;
     void* process_cookie;
+    security::capability::DomainHandle domain;
     State state;
     bool active;
 };
@@ -56,6 +57,7 @@ bool destroy(security::capability::DomainHandle manager, security::capability::T
 bool acquire_address_space(security::capability::DomainHandle manager,
                            security::capability::Token control, AddressSpaceLease& lease);
 void release_address_space(AddressSpaceLease& lease);
+bool validate_address_space_lease(const AddressSpaceLease& lease);
 bool self_test();
 Statistics statistics();
 u32 failure_code();

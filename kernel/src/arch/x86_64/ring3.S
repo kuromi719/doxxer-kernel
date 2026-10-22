@@ -11,6 +11,10 @@
 .extern doxxer_ring3_probe_rsp
 .extern doxxer_ring3_probe_cs
 .extern doxxer_ring3_probe_ss
+.extern doxxer_ring3_probe_request
+.extern doxxer_ring3_probe_response
+.extern doxxer_ring3_probe_status
+.extern doxxer_ring3_probe_dispatch
 
 .global doxxer_enter_ring3_probe
 .type doxxer_enter_ring3_probe, @function
@@ -59,9 +63,17 @@ doxxer_ring3_syscall_probe_entry:
     movq %rsp, doxxer_ring3_probe_rsp(%rip)
     movq %r8, doxxer_ring3_probe_cs(%rip)
     movq %r9, doxxer_ring3_probe_ss(%rip)
+    movq %rdi, doxxer_ring3_probe_request(%rip)
+    movq %rsi, doxxer_ring3_probe_response(%rip)
     movq doxxer_ring3_probe_kernel_cr3(%rip), %rax
     movq %rax, %cr3
     movq doxxer_ring3_probe_kernel_rsp(%rip), %rsp
+    subq $8, %rsp
+    movq doxxer_ring3_probe_request(%rip), %rdi
+    movq doxxer_ring3_probe_response(%rip), %rsi
+    callq doxxer_ring3_probe_dispatch
+    movq %rax, doxxer_ring3_probe_status(%rip)
+    addq $8, %rsp
     movq doxxer_ring3_probe_resume(%rip), %rax
     jmpq *%rax
 

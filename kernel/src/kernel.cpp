@@ -122,6 +122,12 @@ namespace {
     log::write_decimal(syscall_stats.rejected);
     log::write(" REJECTED\n");
     log::success("BOUNDED SYSCALL ABI ONLINE");
+    log::write("[INFO] USER SYSCALL GATEWAY: ");
+    log::write_decimal(syscall_stats.user_entries);
+    log::write(" ENTRIES / ");
+    log::write_decimal(syscall_stats.user_copy_rejections);
+    log::write(" COPY REJECTIONS\n");
+    log::success("USER SYSCALL COPY GATEWAY ONLINE");
 
     if (!service::initialize() || !service::self_test()) {
         log::write("[ERROR] SERVICE REGISTRY SELF-TEST STAGE: ");
@@ -199,6 +205,7 @@ namespace {
         panic("RING-3 PRIVILEGE TRANSITION SELF-TEST FAILED");
     }
     log::success("RING-3 SYSCALL TRANSITION VERIFIED");
+    log::success("END-TO-END USER ABI DISPATCH VERIFIED");
 
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");

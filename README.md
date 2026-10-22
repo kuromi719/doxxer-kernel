@@ -35,6 +35,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Manual- and auto-reset capability events with non-blocking, allocation-free wait semantics
 - Isolated process containers with private address spaces, capability domains, and explicit lifecycle
 - Pointer-free versioned syscall request ABI for IPC, events, and process control
+- Process-lease-bound syscall gateway with bounded request/response copies through isolated windows
 - Capability service registry with validated names and revocable attenuated resolution
 - Page-aware user-memory validation and bounded copy helpers with no user-pointer dereference
 - Per-CPU supervisor-only, NX temporary windows for runtime access to user-owned physical pages

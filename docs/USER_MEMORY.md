@@ -15,3 +15,9 @@ copies do not expose the page through the inherited broad physical direct map.
 
 The self-test copies across two pages, removes write permission from the second page, verifies that
 reads still work, and checks null, kernel-half, overflow, and oversized-range rejection.
+
+The syscall layer consumes these helpers through a process-bound gateway. A live address-space
+lease carries the exact capability domain of its process, and lease validation checks the process
+cookie, address-space identity, domain generation, lifecycle state, and pin count before accepting
+a user request. The complete request is copied into kernel storage before dispatch, and the fully
+initialized response is copied back only through a writable user mapping.

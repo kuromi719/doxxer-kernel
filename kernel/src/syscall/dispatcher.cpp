@@ -1,6 +1,7 @@
 #include <doxxer/syscall/dispatcher.hpp>
 
 #include <doxxer/process/process.hpp>
+#include <doxxer/memory/user_copy.hpp>
 #include <doxxer/sync/event.hpp>
 
 namespace doxxer::syscall {
@@ -12,6 +13,8 @@ bool initialized = false;
 u64 dispatched_calls = 0;
 u64 successful_calls = 0;
 u64 rejected_calls = 0;
+u64 user_entries = 0;
+u64 user_copy_rejections = 0;
 u32 last_failure = 0;
 
 void clear_response(Response& response) {
@@ -140,6 +143,29 @@ Status dispatch(security::capability::DomainHandle caller, const Request& reques
     }
 }
 
+Status dispatch_user(process::AddressSpaceLease& caller, u64 user_request,
+                     u64 user_response) {
+    __atomic_add_fetch(&user_entries, 1ULL, __ATOMIC_RELAXED);
+    if (!process::validate_address_space_lease(caller)) {
+        __atomic_add_fetch(&user_copy_rejections, 1ULL, __ATOMIC_RELAXED);
+        return Status::denied_or_unavailable;
+    }
+    Request request{};
+    if (!memory::user_copy::copy_from_user(*caller.space, &request, user_request,
+                                           sizeof(request))) {
+        __atomic_add_fetch(&user_copy_rejections, 1ULL, __ATOMIC_RELAXED);
+        return Status::invalid_request;
+    }
+    Response response{};
+    const Status result = dispatch(caller.domain, request, response);
+    if (!memory::user_copy::copy_to_user(*caller.space, user_response, &response,
+                                         sizeof(response))) {
+        __atomic_add_fetch(&user_copy_rejections, 1ULL, __ATOMIC_RELAXED);
+        return Status::invalid_request;
+    }
+    return result;
+}
+
 bool self_test() {
     last_failure = 0;
     security::capability::DomainHandle caller{};
@@ -148,8 +174,13 @@ bool self_test() {
     sync::event::Handle event{};
     sync::event::Endpoints event_endpoints{};
     process::CreateResult child{};
+    process::AddressSpaceLease child_space{};
     Request request{};
     Response response{};
+    u64 request_page = 0;
+    u64 response_page = 0;
+    constexpr u64 kUserRequest = 0x90'0000ULL;
+    constexpr u64 kUserResponse = 0x91'0000ULL;
     if (!security::capability::create_domain(caller) ||
         !ipc::create(caller, channel, ipc_endpoints) ||
         !sync::event::create(caller, false, false, event, event_endpoints) ||
@@ -224,11 +255,66 @@ bool self_test() {
         last_failure = 8;
         return false;
     }
+
+    if (!process::acquire_address_space(caller, child.control, child_space) ||
+        child_space.domain.slot != child.domain.slot ||
+        child_space.domain.generation != child.domain.generation ||
+        !memory::physical::allocate_page(request_page, memory::physical::PageOwner::user_data,
+                                         memory::physical::Zone::any,
+                                         child_space.space->isolation_domain()) ||
+        !memory::physical::allocate_page(response_page, memory::physical::PageOwner::user_data,
+                                         memory::physical::Zone::any,
+                                         child_space.space->isolation_domain()) ||
+        !memory::virtual_memory::map(*child_space.space, kUserRequest, request_page,
+                                     memory::virtual_memory::MapFlags::user |
+                                         memory::virtual_memory::MapFlags::write) ||
+        !memory::virtual_memory::map(*child_space.space, kUserResponse, response_page,
+                                     memory::virtual_memory::MapFlags::user |
+                                         memory::virtual_memory::MapFlags::write)) {
+        last_failure = 9;
+        return false;
+    }
+    Request user_request{};
+    user_request.abi_version = kAbiVersion;
+    user_request.number = Number::abi_info;
+    Response user_response{};
+    process::AddressSpaceLease forged_lease = child_space;
+    ++forged_lease.domain.generation;
+    if (!memory::user_copy::copy_to_user(*child_space.space, kUserRequest, &user_request,
+                                         sizeof(user_request)) ||
+        dispatch_user(child_space, kUserRequest, kUserResponse) != Status::ok ||
+        !memory::user_copy::copy_from_user(*child_space.space, &user_response, kUserResponse,
+                                           sizeof(user_response)) ||
+        user_response.status != Status::ok || user_response.values[0] != kAbiVersion ||
+        user_response.values[1] != ipc::kMaximumPayloadSize ||
+        !memory::virtual_memory::protect(*child_space.space, kUserResponse,
+                                         memory::virtual_memory::MapFlags::user) ||
+        dispatch_user(child_space, kUserRequest, kUserResponse) != Status::invalid_request ||
+        dispatch_user(child_space, 0, kUserResponse) != Status::invalid_request ||
+        dispatch_user(forged_lease, kUserRequest, kUserResponse) !=
+            Status::denied_or_unavailable ||
+        !memory::virtual_memory::protect(*child_space.space, kUserResponse,
+                                         memory::virtual_memory::MapFlags::user |
+                                             memory::virtual_memory::MapFlags::write)) {
+        last_failure = 10;
+        return false;
+    }
+    if (!memory::virtual_memory::unmap(*child_space.space, kUserRequest) ||
+        !memory::virtual_memory::unmap(*child_space.space, kUserResponse) ||
+        !memory::physical::free_page(request_page, memory::physical::PageOwner::user_data,
+                                     child_space.space->isolation_domain()) ||
+        !memory::physical::free_page(response_page, memory::physical::PageOwner::user_data,
+                                     child_space.space->isolation_domain())) {
+        last_failure = 11;
+        return false;
+    }
+    process::release_address_space(child_space);
+
     request.number = Number::process_terminate;
     request.arguments[1] = 77;
     if (dispatch(caller, request, response) != Status::ok ||
         !process::destroy(caller, child.control)) {
-        last_failure = 9;
+        last_failure = 12;
         return false;
     }
 
@@ -236,26 +322,26 @@ bool self_test() {
     request.abi_version = kAbiVersion + 1;
     request.number = Number::abi_info;
     if (dispatch(caller, request, response) != Status::invalid_request) {
-        last_failure = 10;
+        last_failure = 13;
         return false;
     }
     request.abi_version = kAbiVersion;
     request.flags = 1;
     if (dispatch(caller, request, response) != Status::invalid_request) {
-        last_failure = 11;
+        last_failure = 14;
         return false;
     }
     request.flags = 0;
     request.number = static_cast<Number>(0xFFFF'FFFFU);
     if (dispatch(caller, request, response) != Status::unsupported) {
-        last_failure = 12;
+        last_failure = 15;
         return false;
     }
 
     if (!ipc::destroy(caller, ipc_endpoints.administrator) ||
         !sync::event::destroy(caller, event_endpoints.administrator) ||
         !security::capability::destroy_domain(caller)) {
-        last_failure = 13;
+        last_failure = 16;
         return false;
     }
     return true;
@@ -266,6 +352,9 @@ Statistics statistics() {
         .dispatched = __atomic_load_n(&dispatched_calls, __ATOMIC_RELAXED),
         .successful = __atomic_load_n(&successful_calls, __ATOMIC_RELAXED),
         .rejected = __atomic_load_n(&rejected_calls, __ATOMIC_RELAXED),
+        .user_entries = __atomic_load_n(&user_entries, __ATOMIC_RELAXED),
+        .user_copy_rejections =
+            __atomic_load_n(&user_copy_rejections, __ATOMIC_RELAXED),
     };
 }
 

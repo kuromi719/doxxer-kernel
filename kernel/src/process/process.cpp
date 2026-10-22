@@ -295,6 +295,7 @@ bool acquire_address_space(security::capability::DomainHandle manager,
             lease = {
                 .space = &process->address_space,
                 .process_cookie = process,
+                .domain = process->domain,
                 .state = process->state,
                 .active = true,
             };
@@ -318,7 +319,9 @@ void release_address_space(AddressSpaceLease& lease) {
     {
         sync::LockGuard guard(process->lock);
         if (!process->active || process->address_space_users == 0 ||
-            &process->address_space != lease.space) {
+            &process->address_space != lease.space ||
+            process->domain.slot != lease.domain.slot ||
+            process->domain.generation != lease.domain.generation) {
             reject();
             lease = {};
             return;
@@ -326,6 +329,19 @@ void release_address_space(AddressSpaceLease& lease) {
         --process->address_space_users;
     }
     lease = {};
+}
+
+bool validate_address_space_lease(const AddressSpaceLease& lease) {
+    if (!lease.active || lease.process_cookie == nullptr || lease.space == nullptr) {
+        return false;
+    }
+    auto* process = static_cast<Process*>(lease.process_cookie);
+    sync::LockGuard guard(process->lock);
+    return process->active && !process->destroying && process->state == State::ready &&
+           lease.state == State::ready && process->address_space_users != 0 &&
+           &process->address_space == lease.space &&
+           process->domain.slot == lease.domain.slot &&
+           process->domain.generation == lease.domain.generation;
 }
 
 bool self_test() {
