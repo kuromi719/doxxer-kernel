@@ -13,7 +13,7 @@ The domain is checked independently at every security-sensitive boundary:
 - ELF image population and teardown;
 - user stack construction and destruction;
 - validated user-memory copies and execute-range checks;
-- kernel direct-map access to user-owned physical pages.
+- absence of a public broad-direct-map accessor for user-owned pages.
 
 Every successful user mapping also pins each physical page through a reference counter stored inside
 the sealed shadow entry. Unmapping releases the pin. A mapped page cannot be freed, reclassified, or
@@ -22,9 +22,9 @@ later owner's data. Multiple aliases are counted independently, counter overflow
 an address space cannot be destroyed while user mappings remain. User/supervisor classification
 cannot be changed through the permission-update operation.
 
-The general supervisor mapping API rejects managed user-owned pages. Kernel code that knows a
-physical address therefore cannot bypass the domain checks by inserting the same page as a
-supervisor-only alias.
+The general supervisor mapping API rejects managed user-owned pages, and the physical allocator
+does not publish a broad-direct-map accessor for them. Kernel code that knows a physical address
+therefore cannot bypass the supported domain checks by requesting a persistent supervisor alias.
 
 Owner class and domain are separate invariants. For example, a `user_data` page owned by process A
 still cannot be mapped, copied, directly accessed, or released through process B's address space.

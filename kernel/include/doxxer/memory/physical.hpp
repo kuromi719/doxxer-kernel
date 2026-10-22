@@ -45,6 +45,7 @@ struct Statistics {
     u64 domain_rejections;
     u64 mapping_rejections;
     u64 user_mapping_references;
+    u64 supervisor_mapping_references;
 };
 
 bool initialize(const volatile limine_memmap_response* memory_map,
@@ -59,17 +60,16 @@ bool free_page(u64 physical_address, PageOwner owner,
                IsolationDomain domain = kKernelDomain);
 bool free_contiguous(u64 physical_address, u64 page_count, PageOwner owner,
                      IsolationDomain domain = kKernelDomain);
-void* direct_map_owned(u64 physical_address, PageOwner owner,
-                       IsolationDomain domain = kKernelDomain);
 void* direct_map_page_table(u64 physical_address);
 void* direct_map_firmware(u64 physical_address);
 bool owner_of(u64 physical_address, PageOwner& owner);
 bool user_mapping_allowed(u64 physical_address, u64 page_count, bool executable,
                           IsolationDomain domain);
-bool supervisor_mapping_allowed(u64 physical_address, u64 page_count);
 bool retain_user_mapping(u64 physical_address, u64 page_count, bool executable,
                          IsolationDomain domain);
 bool release_user_mapping(u64 physical_address, u64 page_count, IsolationDomain domain);
+bool retain_supervisor_mapping(u64 physical_address, u64 page_count);
+bool release_supervisor_mapping(u64 physical_address, u64 page_count);
 Statistics statistics();
 bool self_test();
 u32 self_test_failure();

@@ -229,6 +229,7 @@ namespace {
     log::write_decimal(iommu_stats.quiesced_pci_functions);
     log::write("\n");
     log::success("DMA REMAPPING DEFAULT-DENY");
+    log::success("DMA ROOT TABLES PINNED");
 
     if (!arch::x86_64::apic::initialize(*topology)) {
         log::write("[ERROR] APIC FAILURE STAGE: ");
@@ -403,6 +404,7 @@ extern "C" [[noreturn]] void kernel_main() {
     log::write_decimal(isolated_memory_stats.mapping_rejections);
     log::write(" REJECTIONS\n");
     log::success("MAPPED USER PAGE LIFETIMES PINNED");
+    log::success("USER HHDM ACCESS API SEALED");
 
     if (!arch::x86_64::protection::initialize()) {
         panic("CPU PROTECTION INITIALIZATION FAILED");
@@ -430,6 +432,12 @@ extern "C" [[noreturn]] void kernel_main() {
     log::write_decimal(temporary_stats.failures);
     log::write(" FAILURES\n");
     log::success("EPHEMERAL USER MEMORY WINDOWS VERIFIED");
+    const memory::physical::Statistics protected_memory_stats =
+        memory::physical::statistics();
+    log::write("[INFO] SUPERVISOR PAGE PINS: ");
+    log::write_decimal(protected_memory_stats.supervisor_mapping_references);
+    log::write(" ACTIVE\n");
+    log::success("SUPERVISOR MAPPING LIFETIMES PINNED");
     log::success("SUPERVISOR STACK WINDOWS ISOLATED");
     log::success("EXCEPTION AND GUARD SELF-TEST PASSED");
     arch::x86_64::protection::enter_kernel_stack(protected_kernel_main);

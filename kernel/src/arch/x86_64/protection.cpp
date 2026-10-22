@@ -286,6 +286,8 @@ bool supervisor_windows_valid() {
 
     bool valid = memory::virtual_memory::query(process_space, stack_address, inherited) &&
                  !memory::virtual_memory::has_flag(inherited.flags, MapFlags::user) &&
+                 !memory::physical::free_page(inherited.physical_address,
+                                              memory::physical::PageOwner::kernel_stack) &&
                  !memory::virtual_memory::map(process_space, kernel_stack.virtual_base,
                                               inherited.physical_address, MapFlags::write) &&
                  !memory::virtual_memory::unmap(process_space, stack_address) &&

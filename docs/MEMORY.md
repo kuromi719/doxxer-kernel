@@ -75,10 +75,13 @@ Current invariants and capabilities:
 - empty intermediate tables are pruned and returned to the physical allocator, except for the
   reserved supervisor-window roots that preserve live sharing;
 - complete inactive address spaces can be destroyed without freeing leaf data;
-- new spaces inherit the kernel half plus three supervisor-only runtime-stack windows;
+- new spaces inherit the kernel half plus four supervisor-only protection, per-CPU, scheduler, and
+  temporary-access windows;
 - inherited supervisor windows remain immutable to child spaces and are excluded from teardown;
 - public mapping operations cannot mutate the shared kernel half or supervisor windows;
 - address-space identifiers retain a validated 12-bit PCID for later activation;
+- every managed leaf mapping holds a sealed physical-page reference until unmap, including
+  supervisor-only stacks, heap pages, and IOMMU tables;
 - active-space edits perform local `invlpg` invalidation; and
 - page-table operations are lock-protected in preparation for SMP.
 
@@ -86,8 +89,8 @@ The boot self-test builds an isolated address space, checks W^X and unknown-flag
 rejection, translates offset addresses through both page sizes, validates a
 non-present guard page, temporarily activates the new CR3 and verifies a real
 hardware alias, restores the boot address space, changes permissions, unmaps both
-mappings, destroys the page-table tree, and verifies exact physical-page
-accounting restoration.
+user mappings plus the supervisor probe, destroys the page-table tree, and verifies exact
+physical-page accounting restoration.
 
 The kernel now activates an owned PML4 whose upper half inherits the immutable
 boot mappings and whose lower half contains supervisor-only runtime and

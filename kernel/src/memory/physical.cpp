@@ -53,6 +53,7 @@ struct State {
     u64 domain_rejections = 0;
     u64 mapping_rejections = 0;
     u64 user_mapping_references = 0;
+    u64 supervisor_mapping_references = 0;
     u64 hhdm_offset = 0;
     u64 page_count = 0;
     u64 discovered_usable_pages = 0;
@@ -525,8 +526,12 @@ bool free_contiguous(u64 physical_address, u64 page_count, PageOwner owner,
     return true;
 }
 
-void* direct_map_owned(u64 physical_address, PageOwner owner, IsolationDomain domain) {
+static void* direct_map_kernel_owned_for_self_test(u64 physical_address, PageOwner owner) {
     if (!state.initialized || state.hhdm_offset > static_cast<u64>(-1) - physical_address) {
+        return nullptr;
+    }
+    if (user_owner(owner)) {
+        __atomic_add_fetch(&state.mapping_rejections, 1ULL, __ATOMIC_RELAXED);
         return nullptr;
     }
     const u64 page = physical_address / kPageSize;
@@ -540,7 +545,7 @@ void* direct_map_owned(u64 physical_address, PageOwner owner, IsolationDomain do
         ++state.ownership_rejections;
         return nullptr;
     }
-    if (state.shadow[page].domain != domain) {
+    if (state.shadow[page].domain != kKernelDomain) {
         __atomic_add_fetch(&state.domain_rejections, 1ULL, __ATOMIC_RELAXED);
         return nullptr;
     }
@@ -639,7 +644,7 @@ bool user_mapping_allowed(u64 physical_address, u64 page_count, bool executable,
     return user_range_valid_locked(first_page, page_count, executable, domain);
 }
 
-bool supervisor_mapping_allowed(u64 physical_address, u64 page_count) {
+bool retain_supervisor_mapping(u64 physical_address, u64 page_count) {
     if (!state.initialized || page_count == 0 || physical_address % kPageSize != 0) {
         return false;
     }
@@ -648,6 +653,7 @@ bool supervisor_mapping_allowed(u64 physical_address, u64 page_count) {
         return false;
     }
     sync::LockGuard guard(state.lock);
+    u64 managed_pages = 0;
     for (u64 index = 0; index < page_count; ++index) {
         const u64 page = first_page + index;
         if (page >= state.page_count || !state.managed.get(page)) {
@@ -661,7 +667,69 @@ bool supervisor_mapping_allowed(u64 physical_address, u64 page_count) {
             __atomic_add_fetch(&state.mapping_rejections, 1ULL, __ATOMIC_RELAXED);
             return false;
         }
+        if (state.shadow[page].mapping_references == 0xFFFF'FFFFU) {
+            __atomic_add_fetch(&state.mapping_rejections, 1ULL, __ATOMIC_RELAXED);
+            return false;
+        }
+        ++managed_pages;
     }
+    if (state.supervisor_mapping_references > static_cast<u64>(-1) - managed_pages) {
+        __atomic_add_fetch(&state.mapping_rejections, 1ULL, __ATOMIC_RELAXED);
+        return false;
+    }
+    for (u64 index = 0; index < page_count; ++index) {
+        const u64 page = first_page + index;
+        if (page >= state.page_count || !state.managed.get(page)) {
+            continue;
+        }
+        ShadowEntry& entry = state.shadow[page];
+        ++entry.mapping_references;
+        entry.seal = shadow_seal(page, entry);
+    }
+    state.supervisor_mapping_references += managed_pages;
+    return true;
+}
+
+bool release_supervisor_mapping(u64 physical_address, u64 page_count) {
+    if (!state.initialized || page_count == 0 || physical_address % kPageSize != 0) {
+        return false;
+    }
+    const u64 first_page = physical_address / kPageSize;
+    if (first_page > static_cast<u64>(-1) - page_count) {
+        return false;
+    }
+    sync::LockGuard guard(state.lock);
+    u64 managed_pages = 0;
+    for (u64 index = 0; index < page_count; ++index) {
+        const u64 page = first_page + index;
+        if (page >= state.page_count || !state.managed.get(page)) {
+            continue;
+        }
+        if (!state.used.get(page) || !shadow_valid(page)) {
+            ++state.integrity_failures;
+            return false;
+        }
+        if (user_owner(state.shadow[page].owner) ||
+            state.shadow[page].mapping_references == 0) {
+            __atomic_add_fetch(&state.mapping_rejections, 1ULL, __ATOMIC_RELAXED);
+            return false;
+        }
+        ++managed_pages;
+    }
+    if (state.supervisor_mapping_references < managed_pages) {
+        ++state.integrity_failures;
+        return false;
+    }
+    for (u64 index = 0; index < page_count; ++index) {
+        const u64 page = first_page + index;
+        if (page >= state.page_count || !state.managed.get(page)) {
+            continue;
+        }
+        ShadowEntry& entry = state.shadow[page];
+        --entry.mapping_references;
+        entry.seal = shadow_seal(page, entry);
+    }
+    state.supervisor_mapping_references -= managed_pages;
     return true;
 }
 
@@ -758,6 +826,7 @@ Statistics statistics() {
         .mapping_rejections =
             __atomic_load_n(&state.mapping_rejections, __ATOMIC_RELAXED),
         .user_mapping_references = state.user_mapping_references,
+        .supervisor_mapping_references = state.supervisor_mapping_references,
     };
 }
 
@@ -843,9 +912,11 @@ bool self_test() {
         }
         return true;
     };
-    if (!zero_sampled(static_cast<const u8*>(direct_map_owned(single, PageOwner::test))) ||
-        !zero_sampled(static_cast<const u8*>(direct_map_owned(run, PageOwner::test))) ||
-        direct_map_owned(single, PageOwner::kernel_heap) != nullptr ||
+    if (!zero_sampled(static_cast<const u8*>(
+            direct_map_kernel_owned_for_self_test(single, PageOwner::test))) ||
+        !zero_sampled(static_cast<const u8*>(
+            direct_map_kernel_owned_for_self_test(run, PageOwner::test))) ||
+        direct_map_kernel_owned_for_self_test(single, PageOwner::kernel_heap) != nullptr ||
         free_page(single, PageOwner::kernel_heap)) {
         last_self_test_failure = 6;
         cleanup();
@@ -859,7 +930,7 @@ bool self_test() {
         allocate_page(invalid_domain_page, PageOwner::user_data) ||
         direct_map_user_for_self_test(domain_page, 8) != nullptr ||
         free_page(domain_page, PageOwner::user_data, 8) ||
-        supervisor_mapping_allowed(domain_page, 1) ||
+        retain_supervisor_mapping(domain_page, 1) ||
         !zero_sampled(static_cast<const u8*>(direct_map_user_for_self_test(domain_page, 7)))) {
         last_self_test_failure = 7;
         cleanup();
@@ -907,6 +978,9 @@ bool self_test() {
         last_self_test_failure = 16;
     } else if (after.user_mapping_references != before.user_mapping_references) {
         last_self_test_failure = 17;
+    } else if (after.supervisor_mapping_references !=
+               before.supervisor_mapping_references) {
+        last_self_test_failure = 18;
     }
     return last_self_test_failure == 0;
 }

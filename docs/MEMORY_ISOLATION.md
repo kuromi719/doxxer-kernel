@@ -14,16 +14,18 @@ Kernel heap, page-table, IOMMU, and stack pages therefore cannot be exposed thro
 API. User-copy operations likewise reject physical pages outside the user-owner set.
 
 User-owned pages also carry a nonzero address-space isolation domain inside the sealed entry. The
-VMM, image loader, user-stack code, user-copy layer, direct-access path, and release path require an
-exact domain match. Two processes therefore cannot exchange physical pages merely because both
+VMM, image loader, user-stack code, user-copy layer, temporary-access path, and release path require
+an exact domain match. Two processes therefore cannot exchange physical pages merely because both
 pages have the same broad owner class. Domain identifiers are monotonic and fail closed on
 exhaustion instead of being reused within the same boot.
 
-The ledger additionally seals a per-page mapping-reference count. VMM mapping retains user pages,
-unmapping releases them, and the allocator refuses to free any page with a live reference. This
-prevents stale page-table entries from observing a page after it has been recycled for a different
-object or domain. Address-space destruction requires an empty user half rather than silently
-dissolving mappings, and managed user pages cannot be inserted through the supervisor mapping path.
+The ledger additionally seals a per-page mapping-reference count. VMM mapping retains both user
+and managed supervisor pages, unmapping releases them, and the allocator refuses to free any page
+with a live reference. This prevents stale page-table entries from observing a page after it has
+been recycled for a different object or domain. Address-space destruction requires an empty user
+half rather than silently dissolving mappings, and managed user pages cannot be inserted through
+the general supervisor mapping path. No public physical-memory API exposes a broad-direct-map
+pointer for user or general kernel-owned pages.
 
 Pages are zeroed both before allocation is returned and before release. The shadow generation is
 advanced on every state transition so stale ownership observations cannot silently match a later

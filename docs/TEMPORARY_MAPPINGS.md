@@ -27,6 +27,7 @@ requires switching slot selection to the kernel CPU-local index.
 
 The firmware-created HHDM is still retained for early allocator bootstrap, page-table editing, and
 explicit physical-memory self-tests. Eliminating that inherited broad alias requires Doxxer-owned
-bootstrap page tables and separate short-lived page-table editing windows. The current mechanism
-therefore reduces routine user-page exposure; it is not a claim that RAM is unreadable after
-arbitrary kernel compromise or physical access.
+bootstrap page tables and separate short-lived page-table editing windows. The public physical
+memory API no longer exposes a general broad-HHDM accessor, so routine user-page code must use the
+temporary window. The current mechanism reduces accidental user-page exposure; it is not a claim
+that RAM is unreadable after arbitrary kernel compromise or physical access.

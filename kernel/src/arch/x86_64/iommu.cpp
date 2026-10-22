@@ -10,6 +10,7 @@ using memory::physical::kPageSize;
 using memory::virtual_memory::MapFlags;
 
 constexpr u64 kRegisterVirtualBase = 0x0000'5000'0040'0000ULL;
+constexpr u64 kRootVirtualBase = 0x0000'5000'0080'0000ULL;
 constexpr u32 kVersion = 0x00;
 constexpr u32 kCapability = 0x08;
 constexpr u32 kGlobalCommand = 0x18;
@@ -29,6 +30,8 @@ struct Unit {
     volatile u8* registers;
     u64 register_virtual;
     u64 root_physical;
+    u64 root_virtual;
+    RootEntry* root;
     u32 version;
     u64 capability;
     bool enabled;
@@ -71,15 +74,13 @@ bool wait_status(const Unit& unit, u32 mask, bool set) {
     return false;
 }
 
-bool root_is_empty(u64 root_physical) {
-    const auto* root = static_cast<const RootEntry*>(
-        memory::physical::direct_map_owned(root_physical, memory::physical::PageOwner::iommu));
-    if (root == nullptr) {
+bool root_is_empty(const Unit& unit) {
+    if (unit.root == nullptr) {
         return false;
     }
     u64 aggregate = 0;
     for (usize index = 0; index < 256; ++index) {
-        aggregate |= root[index].low | root[index].high;
+        aggregate |= unit.root[index].low | unit.root[index].high;
     }
     return aggregate == 0;
 }
@@ -161,15 +162,14 @@ bool pci_bus_masters_disabled(u32 expected_functions) {
     return verified == expected_functions;
 }
 
-bool flush_root_table(u64 root_physical) {
+bool flush_root_table(const Unit& unit) {
     u32 eax = 1;
     u32 ebx = 0;
     u32 ecx = 0;
     u32 edx = 0;
     asm volatile("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : : "memory");
     const u32 line_size = ((ebx >> 8U) & 0xFFU) * 8U;
-    auto* root = static_cast<u8*>(
-        memory::physical::direct_map_owned(root_physical, memory::physical::PageOwner::iommu));
+    auto* root = reinterpret_cast<u8*>(unit.root);
     if ((edx & (1U << 19U)) == 0 || line_size < 16 || line_size > 256 ||
         (line_size & (line_size - 1U)) != 0 || root == nullptr) {
         return false;
@@ -192,6 +192,9 @@ void release_all() {
         }
         if (space != nullptr && unit.register_virtual != 0) {
             (void)memory::virtual_memory::unmap(*space, unit.register_virtual);
+        }
+        if (space != nullptr && unit.root_virtual != 0) {
+            (void)memory::virtual_memory::unmap(*space, unit.root_virtual);
         }
         if (unit.root_physical != 0) {
             (void)memory::physical::free_page(unit.root_physical,
@@ -224,8 +227,16 @@ bool initialize_unit(const firmware::acpi::Iommu& description, usize index) {
         return false;
     }
     if (!memory::physical::allocate_page(unit.root_physical,
-                                         memory::physical::PageOwner::iommu) ||
-        !root_is_empty(unit.root_physical) || !flush_root_table(unit.root_physical)) {
+                                         memory::physical::PageOwner::iommu)) {
+        return false;
+    }
+    unit.root_virtual = kRootVirtualBase + index * kPageSize;
+    if (!memory::virtual_memory::map(*space, unit.root_virtual, unit.root_physical,
+                                     MapFlags::write | MapFlags::global)) {
+        return false;
+    }
+    unit.root = reinterpret_cast<RootEntry*>(unit.root_virtual);
+    if (!root_is_empty(unit) || !flush_root_table(unit)) {
         return false;
     }
     write64(unit, kRootTableAddress, unit.root_physical & kRootAddressMask);
@@ -278,7 +289,9 @@ bool self_test() {
         const Unit& unit = units[index];
         if (!unit.enabled || (read32(unit, kGlobalStatus) & kTranslationEnable) == 0 ||
             (read64(unit, kRootTableAddress) & kRootAddressMask) != unit.root_physical ||
-            !root_is_empty(unit.root_physical)) {
+            !root_is_empty(unit) ||
+            memory::physical::free_page(unit.root_physical,
+                                        memory::physical::PageOwner::iommu)) {
             last_failure = static_cast<u32>(31 + index);
             return false;
         }

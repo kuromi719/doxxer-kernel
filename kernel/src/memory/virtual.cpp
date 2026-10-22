@@ -504,13 +504,15 @@ bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlag
     if ((user && !physical::retain_user_mapping(physical_address, mapped_pages,
                                                  has_flag(flags, MapFlags::execute),
                                                  space.isolation_domain())) ||
-        (!user && !physical::supervisor_mapping_allowed(physical_address, mapped_pages))) {
+        (!user && !physical::retain_supervisor_mapping(physical_address, mapped_pages))) {
         return false;
     }
     const auto fail = [&]() {
         if (user) {
             (void)physical::release_user_mapping(physical_address, mapped_pages,
                                                  space.isolation_domain());
+        } else {
+            (void)physical::release_supervisor_mapping(physical_address, mapped_pages);
         }
         return false;
     };
@@ -590,10 +592,14 @@ bool unmap(AddressSpace& space, u64 virtual_address) {
         if (virtual_address % static_cast<u64>(PageSize::size_2m) != 0) {
             return false;
         }
-        if ((pde & kUser) != 0 &&
-            !physical::release_user_mapping(
-                pde & kAddressMask, static_cast<u64>(PageSize::size_2m) / kPageSize,
-                space.isolation_domain())) {
+        const u64 mapped_pages = static_cast<u64>(PageSize::size_2m) / kPageSize;
+        const bool released = (pde & kUser) != 0
+                                  ? physical::release_user_mapping(
+                                        pde & kAddressMask, mapped_pages,
+                                        space.isolation_domain())
+                                  : physical::release_supervisor_mapping(
+                                        pde & kAddressMask, mapped_pages);
+        if (!released) {
             return false;
         }
         pde = 0;
@@ -606,9 +612,12 @@ bool unmap(AddressSpace& space, u64 virtual_address) {
         if ((pte & kPresent) == 0) {
             return false;
         }
-        if ((pte & kUser) != 0 &&
-            !physical::release_user_mapping(pte & kAddressMask, 1,
-                                             space.isolation_domain())) {
+        const bool released =
+            (pte & kUser) != 0
+                ? physical::release_user_mapping(pte & kAddressMask, 1,
+                                                 space.isolation_domain())
+                : physical::release_supervisor_mapping(pte & kAddressMask, 1);
+        if (!released) {
             return false;
         }
         pte = 0;
@@ -787,8 +796,35 @@ bool unmap_temporary_user(TemporaryMapping& mapping) {
     const u64 saved_rflags = mapping.saved_rflags;
     const u64 virtual_address = kTemporaryWindowBase + static_cast<u64>(slot) * kPageSize;
 
-    if (!__atomic_load_n(&temporary_slot_active[slot], __ATOMIC_ACQUIRE) ||
-        !unmap(*space, virtual_address)) {
+    bool removed = false;
+    if (__atomic_load_n(&temporary_slot_active[slot], __ATOMIC_ACQUIRE)) {
+        sync::LockGuard supervisor_guard(supervisor_windows_lock);
+        sync::LockGuard space_guard(space->lock_);
+        PageTable* pml4 = table_from_physical(space->root_physical());
+        PageTable* pdpt = nullptr;
+        PageTable* pd = nullptr;
+        PageTable* pt = nullptr;
+        if (pml4 != nullptr) {
+            u64& pml4e = pml4->entries[pml4_index(virtual_address)];
+            if (next_table(pml4e, false, false, pdpt)) {
+                u64& pdpte = pdpt->entries[pdpt_index(virtual_address)];
+                if (next_table(pdpte, false, false, pd)) {
+                    u64& pde = pd->entries[pd_index(virtual_address)];
+                    if (next_table(pde, false, false, pt)) {
+                        u64& pte = pt->entries[pt_index(virtual_address)];
+                        if ((pte & (kPresent | kUser | kAddressMask)) ==
+                            (kPresent | physical_page)) {
+                            pte = 0;
+                            invalidate_if_active(*space, virtual_address);
+                            prune_empty_path(*space, virtual_address);
+                            removed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (!removed) {
         __atomic_add_fetch(&temporary_failures, 1ULL, __ATOMIC_RELAXED);
         mapping = {};
         temporary_slot_locks[slot].unlock();
@@ -902,11 +938,10 @@ bool self_test() {
     constexpr u64 large_virtual = 0x0000'0050'0000'0000ULL;
     constexpr u64 guard_virtual = small_virtual + kPageSize;
     constexpr u64 foreign_virtual = 0x0000'0060'0000'0000ULL;
+    constexpr u64 kernel_virtual = 0x0000'0061'0000'0000ULL;
     if (is_canonical(0x0000'8000'0000'0000ULL) || is_canonical(0xFFFF'0000'0000'0000ULL) ||
         map(foreign_space, foreign_virtual, page, MapFlags::user) ||
         map(foreign_space, foreign_virtual, page, MapFlags::none) ||
-        physical::direct_map_owned(page, physical::PageOwner::user_image,
-                                   foreign_space.isolation_domain()) != nullptr ||
         physical::free_page(page, physical::PageOwner::user_image,
                             foreign_space.isolation_domain()) ||
         map(space, 0xFFFF'8000'0000'0000ULL, page, MapFlags::none) ||
@@ -914,11 +949,13 @@ bool self_test() {
         map(space, guard_virtual, kernel_page, MapFlags::write | MapFlags::user) ||
         map(space, guard_virtual, stack_page, MapFlags::user | MapFlags::execute) ||
         !map(space, small_virtual, page, MapFlags::write | MapFlags::user) ||
+        !map(space, kernel_virtual, kernel_page, MapFlags::write) ||
         map(space, small_virtual, page, MapFlags::user) ||
         map(space, guard_virtual, page, MapFlags::write | MapFlags::execute, PageSize::size_4k) ||
         !map(space, large_virtual, large_run, MapFlags::user | MapFlags::execute,
              PageSize::size_2m) ||
         physical::free_page(page, physical::PageOwner::user_image, space_domain) ||
+        physical::free_page(kernel_page, physical::PageOwner::kernel_heap) ||
         destroy(space)) {
         last_self_test_failure = 2;
         cleanup();
@@ -928,6 +965,7 @@ bool self_test() {
     Mapping small_mapping{};
     Mapping large_mapping{};
     Mapping guard_mapping{};
+    Mapping kernel_mapping{};
     if (!query(space, small_virtual + 123, small_mapping) ||
         small_mapping.physical_address != page + 123 ||
         small_mapping.page_size != PageSize::size_4k ||
@@ -937,6 +975,11 @@ bool self_test() {
         large_mapping.physical_address != large_run + 4096 ||
         large_mapping.page_size != PageSize::size_2m ||
         !has_flag(large_mapping.flags, MapFlags::execute) ||
+        !query(space, kernel_virtual, kernel_mapping) ||
+        kernel_mapping.physical_address != kernel_page ||
+        !has_flag(kernel_mapping.flags, MapFlags::write) ||
+        has_flag(kernel_mapping.flags, MapFlags::execute) ||
+        has_flag(kernel_mapping.flags, MapFlags::user) ||
         query(space, guard_virtual, guard_mapping)) {
         last_self_test_failure = 3;
         cleanup();
@@ -950,9 +993,7 @@ bool self_test() {
     *hardware_alias = alias_probe;
     const u64 observed_probe = *hardware_alias;
     write_cr3(original_cr3);
-    const auto* direct_page = static_cast<const volatile u64*>(
-        physical::direct_map_owned(page, physical::PageOwner::user_image, space_domain));
-    if (observed_probe != alias_probe || direct_page == nullptr || *direct_page != alias_probe) {
+    if (observed_probe != alias_probe) {
         last_self_test_failure = 4;
         cleanup();
         return false;
@@ -965,6 +1006,7 @@ bool self_test() {
         has_flag(small_mapping.flags, MapFlags::write) ||
         !has_flag(small_mapping.flags, MapFlags::execute) || !unmap(space, small_virtual) ||
         unmap(space, small_virtual) || !unmap(space, large_virtual) ||
+        !unmap(space, kernel_virtual) ||
         query(space, large_virtual, large_mapping) ||
         map(space, 0x0001'0000'0000'0000ULL, page, MapFlags::none)) {
         last_self_test_failure = 5;
@@ -994,7 +1036,8 @@ bool self_test() {
     const physical::Statistics after = physical::statistics();
     if (before.free_pages != after.free_pages || before.allocated_pages != after.allocated_pages ||
         before.user_mapping_references != after.user_mapping_references ||
-        after.mapping_rejections != before.mapping_rejections + 2) {
+        after.mapping_rejections != before.mapping_rejections + 3 ||
+        before.supervisor_mapping_references != after.supervisor_mapping_references) {
         last_self_test_failure = 8;
         return false;
     }
