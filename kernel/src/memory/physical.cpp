@@ -31,13 +31,14 @@ struct Bitmap {
 struct ShadowEntry {
     u64 seal;
     u32 generation;
+    IsolationDomain domain;
     PageOwner owner;
     u8 managed;
     u8 used;
     u8 reserved;
 };
 
-static_assert(sizeof(ShadowEntry) == 16);
+static_assert(sizeof(ShadowEntry) == 24);
 
 struct State {
     Bitmap used{};
@@ -47,6 +48,7 @@ struct State {
     u64 shadow_bytes = 0;
     u64 integrity_failures = 0;
     u64 ownership_rejections = 0;
+    u64 domain_rejections = 0;
     u64 hhdm_offset = 0;
     u64 page_count = 0;
     u64 discovered_usable_pages = 0;
@@ -91,7 +93,8 @@ u64 shadow_seal(u64 page, const ShadowEntry& entry) {
                            (static_cast<u64>(entry.owner) << 32U) |
                            (static_cast<u64>(entry.managed) << 40U) |
                            (static_cast<u64>(entry.used) << 48U);
-    return mix64(state.shadow_key ^ (page * 0x9E37'79B9'7F4A'7C15ULL) ^ state_bits);
+    return mix64(state.shadow_key ^ (page * 0x9E37'79B9'7F4A'7C15ULL) ^ state_bits ^
+                 (static_cast<u64>(entry.domain) * 0xD6E8'FEB8'6659'FD93ULL));
 }
 
 bool shadow_valid(u64 page) {
@@ -105,7 +108,8 @@ bool shadow_valid(u64 page) {
            (entry.used != 0) == state.used.get(page);
 }
 
-void set_page_state(u64 page, bool managed, bool used, PageOwner owner) {
+void set_page_state(u64 page, bool managed, bool used, PageOwner owner,
+                    IsolationDomain domain = kKernelDomain) {
     if (page >= state.page_count || state.shadow == nullptr) {
         return;
     }
@@ -117,6 +121,7 @@ void set_page_state(u64 page, bool managed, bool used, PageOwner owner) {
         ++entry.generation;
     }
     entry.owner = owner;
+    entry.domain = domain;
     entry.managed = managed ? 1 : 0;
     entry.used = used ? 1 : 0;
     entry.reserved = 0;
@@ -129,6 +134,22 @@ bool range_end(u64 base, u64 length, u64& end) {
     }
     end = base + length;
     return true;
+}
+
+constexpr bool user_owner(PageOwner owner) {
+    return owner == PageOwner::user_image || owner == PageOwner::user_stack ||
+           owner == PageOwner::user_data;
+}
+
+constexpr bool allocatable_owner(PageOwner owner) {
+    return owner == PageOwner::page_table || owner == PageOwner::kernel_heap ||
+           owner == PageOwner::kernel_stack || owner == PageOwner::user_image ||
+           owner == PageOwner::user_stack || owner == PageOwner::user_data ||
+           owner == PageOwner::iommu || owner == PageOwner::test;
+}
+
+constexpr bool domain_valid(PageOwner owner, IsolationDomain domain) {
+    return user_owner(owner) ? domain != kKernelDomain : domain == kKernelDomain;
 }
 
 bool is_available(u64 page) {
@@ -214,7 +235,8 @@ bool scan_range(u64 begin, u64 end, u64 count, u64 alignment, u64& found) {
     return false;
 }
 
-bool allocate_from_zone(Zone zone, u64 count, u64 alignment, PageOwner owner, u64& first_page) {
+bool allocate_from_zone(Zone zone, u64 count, u64 alignment, PageOwner owner,
+                        IsolationDomain domain, u64& first_page) {
     u64 begin = 0;
     u64 end = 0;
     zone_bounds(zone, begin, end);
@@ -233,7 +255,7 @@ bool allocate_from_zone(Zone zone, u64 count, u64 alignment, PageOwner owner, u6
     }
 
     for (u64 index = 0; index < count; ++index) {
-        set_page_state(first_page + index, true, true, owner);
+        set_page_state(first_page + index, true, true, owner, domain);
         account_available_page(first_page + index, false);
     }
     state.allocated_pages += count;
@@ -387,15 +409,18 @@ bool initialize(const volatile limine_memmap_response* memory_map,
 
 bool ready() { return state.initialized; }
 
-bool allocate_page(u64& physical_address, PageOwner owner, Zone zone) {
-    return allocate_contiguous(1, 1, physical_address, owner, zone);
+bool allocate_page(u64& physical_address, PageOwner owner, Zone zone, IsolationDomain domain) {
+    return allocate_contiguous(1, 1, physical_address, owner, zone, domain);
 }
 
 bool allocate_contiguous(u64 page_count, u64 alignment_pages, u64& physical_address,
-                         PageOwner owner, Zone zone) {
+                         PageOwner owner, Zone zone, IsolationDomain domain) {
     if (!state.initialized || page_count == 0 || !power_of_two(alignment_pages) ||
         page_count > static_cast<u64>(static_cast<usize>(-1)) / kPageSize ||
-        owner == PageOwner::free || owner == PageOwner::reserved || owner == PageOwner::metadata) {
+        !allocatable_owner(owner) || !domain_valid(owner, domain)) {
+        if (!domain_valid(owner, domain)) {
+            __atomic_add_fetch(&state.domain_rejections, 1ULL, __ATOMIC_RELAXED);
+        }
         return false;
     }
 
@@ -403,11 +428,13 @@ bool allocate_contiguous(u64 page_count, u64 alignment_pages, u64& physical_addr
     u64 first_page = 0;
     bool allocated = false;
     if (zone == Zone::any) {
-        allocated = allocate_from_zone(Zone::normal, page_count, alignment_pages, owner,
+        allocated = allocate_from_zone(Zone::normal, page_count, alignment_pages, owner, domain,
                                        first_page) ||
-                    allocate_from_zone(Zone::dma32, page_count, alignment_pages, owner, first_page);
+                    allocate_from_zone(Zone::dma32, page_count, alignment_pages, owner, domain,
+                                       first_page);
     } else {
-        allocated = allocate_from_zone(zone, page_count, alignment_pages, owner, first_page);
+        allocated = allocate_from_zone(zone, page_count, alignment_pages, owner, domain,
+                                       first_page);
     }
     if (!allocated) {
         return false;
@@ -418,11 +445,12 @@ bool allocate_contiguous(u64 page_count, u64 alignment_pages, u64& physical_addr
     return true;
 }
 
-bool free_page(u64 physical_address, PageOwner owner) {
-    return free_contiguous(physical_address, 1, owner);
+bool free_page(u64 physical_address, PageOwner owner, IsolationDomain domain) {
+    return free_contiguous(physical_address, 1, owner, domain);
 }
 
-bool free_contiguous(u64 physical_address, u64 page_count, PageOwner owner) {
+bool free_contiguous(u64 physical_address, u64 page_count, PageOwner owner,
+                     IsolationDomain domain) {
     if (!state.initialized || page_count == 0 || physical_address % kPageSize != 0) {
         return false;
     }
@@ -450,6 +478,10 @@ bool free_contiguous(u64 physical_address, u64 page_count, PageOwner owner) {
             ++state.ownership_rejections;
             return false;
         }
+        if (state.shadow[page].domain != domain) {
+            __atomic_add_fetch(&state.domain_rejections, 1ULL, __ATOMIC_RELAXED);
+            return false;
+        }
     }
 
     secure_zero_pages(first_page, page_count);
@@ -462,7 +494,7 @@ bool free_contiguous(u64 physical_address, u64 page_count, PageOwner owner) {
     return true;
 }
 
-void* direct_map_owned(u64 physical_address, PageOwner owner) {
+void* direct_map_owned(u64 physical_address, PageOwner owner, IsolationDomain domain) {
     if (!state.initialized || state.hhdm_offset > static_cast<u64>(-1) - physical_address) {
         return nullptr;
     }
@@ -477,11 +509,19 @@ void* direct_map_owned(u64 physical_address, PageOwner owner) {
         ++state.ownership_rejections;
         return nullptr;
     }
+    if (state.shadow[page].domain != domain) {
+        __atomic_add_fetch(&state.domain_rejections, 1ULL, __ATOMIC_RELAXED);
+        return nullptr;
+    }
     return reinterpret_cast<void*>(static_cast<uptr>(state.hhdm_offset + physical_address));
 }
 
-void* direct_map_user(u64 physical_address) {
-    if (!state.initialized || state.hhdm_offset > static_cast<u64>(-1) - physical_address) {
+void* direct_map_user(u64 physical_address, IsolationDomain domain) {
+    if (!state.initialized || domain == kKernelDomain ||
+        state.hhdm_offset > static_cast<u64>(-1) - physical_address) {
+        if (domain == kKernelDomain) {
+            __atomic_add_fetch(&state.domain_rejections, 1ULL, __ATOMIC_RELAXED);
+        }
         return nullptr;
     }
     const u64 page = physical_address / kPageSize;
@@ -495,6 +535,10 @@ void* direct_map_user(u64 physical_address) {
     if (owner != PageOwner::user_image && owner != PageOwner::user_stack &&
         owner != PageOwner::user_data) {
         ++state.ownership_rejections;
+        return nullptr;
+    }
+    if (state.shadow[page].domain != domain) {
+        __atomic_add_fetch(&state.domain_rejections, 1ULL, __ATOMIC_RELAXED);
         return nullptr;
     }
     return reinterpret_cast<void*>(static_cast<uptr>(state.hhdm_offset + physical_address));
@@ -547,8 +591,13 @@ bool owner_of(u64 physical_address, PageOwner& owner) {
     return true;
 }
 
-bool user_mapping_allowed(u64 physical_address, u64 page_count, bool executable) {
-    if (!state.initialized || page_count == 0 || physical_address % kPageSize != 0) {
+bool user_mapping_allowed(u64 physical_address, u64 page_count, bool executable,
+                          IsolationDomain domain) {
+    if (!state.initialized || domain == kKernelDomain || page_count == 0 ||
+        physical_address % kPageSize != 0) {
+        if (domain == kKernelDomain) {
+            __atomic_add_fetch(&state.domain_rejections, 1ULL, __ATOMIC_RELAXED);
+        }
         return false;
     }
     const u64 first_page = physical_address / kPageSize;
@@ -567,6 +616,10 @@ bool user_mapping_allowed(u64 physical_address, u64 page_count, bool executable)
                                 owner == PageOwner::user_data;
         if (!user_owner || (executable && owner != PageOwner::user_image)) {
             ++state.ownership_rejections;
+            return false;
+        }
+        if (state.shadow[page].domain != domain) {
+            __atomic_add_fetch(&state.domain_rejections, 1ULL, __ATOMIC_RELAXED);
             return false;
         }
     }
@@ -589,6 +642,8 @@ Statistics statistics() {
         .shadow_bytes = state.shadow_bytes,
         .integrity_failures = state.integrity_failures,
         .ownership_rejections = state.ownership_rejections,
+        .domain_rejections =
+            __atomic_load_n(&state.domain_rejections, __ATOMIC_RELAXED),
     };
 }
 
@@ -601,10 +656,12 @@ bool self_test() {
     u64 run = 0;
     u64 dma32 = 0;
     u64 normal = 0;
+    u64 domain_page = 0;
     bool single_allocated = false;
     bool run_allocated = false;
     bool dma32_allocated = false;
     bool normal_allocated = false;
+    bool domain_page_allocated = false;
     const auto cleanup = [&]() {
         if (single_allocated) {
             free_page(single, PageOwner::test);
@@ -617,6 +674,9 @@ bool self_test() {
         }
         if (normal_allocated) {
             free_page(normal, PageOwner::test);
+        }
+        if (domain_page_allocated) {
+            free_page(domain_page, PageOwner::user_data, 7);
         }
     };
 
@@ -667,11 +727,24 @@ bool self_test() {
         return false;
     }
 
+    u64 invalid_domain_page = 0;
+    domain_page_allocated =
+        allocate_page(domain_page, PageOwner::user_data, Zone::any, 7);
+    if (!domain_page_allocated ||
+        allocate_page(invalid_domain_page, PageOwner::user_data) ||
+        direct_map_user(domain_page, 8) != nullptr ||
+        free_page(domain_page, PageOwner::user_data, 8) ||
+        !zero_sampled(static_cast<const u8*>(direct_map_user(domain_page, 7)))) {
+        cleanup();
+        return false;
+    }
+
     cleanup();
     single_allocated = false;
     run_allocated = false;
     dma32_allocated = false;
     normal_allocated = false;
+    domain_page_allocated = false;
     if (free_page(single, PageOwner::test)) {
         return false;
     }
@@ -679,6 +752,7 @@ bool self_test() {
     return verify_shadow_ledger() && before.free_pages == after.free_pages &&
            before.allocated_pages == after.allocated_pages &&
            after.integrity_failures == before.integrity_failures &&
-           after.ownership_rejections == before.ownership_rejections + 3;
+           after.ownership_rejections == before.ownership_rejections + 3 &&
+           after.domain_rejections == before.domain_rejections + 3;
 }
 }

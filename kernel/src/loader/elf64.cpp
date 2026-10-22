@@ -150,7 +150,8 @@ void rollback(memory::virtual_memory::AddressSpace& space, Image& image) {
         const Page& page = image.pages[image.page_count];
         (void)memory::virtual_memory::unmap(space, page.virtual_address);
         (void)memory::physical::free_page(page.physical_address,
-                                          memory::physical::PageOwner::user_image);
+                                          memory::physical::PageOwner::user_image,
+                                          space.isolation_domain());
         image.pages[image.page_count] = {};
     }
     image = {};
@@ -240,14 +241,17 @@ bool load(memory::virtual_memory::AddressSpace& space, const void* data, usize s
             }
             u64 physical_address = 0;
             if (!memory::physical::allocate_page(physical_address,
-                                                 memory::physical::PageOwner::user_image) ||
+                                                 memory::physical::PageOwner::user_image,
+                                                 memory::physical::Zone::any,
+                                                 space.isolation_domain()) ||
                 !memory::virtual_memory::map(
                     space, virtual_address, physical_address,
                     memory::virtual_memory::MapFlags::user |
                         memory::virtual_memory::MapFlags::write)) {
                 if (physical_address != 0) {
                     (void)memory::physical::free_page(
-                        physical_address, memory::physical::PageOwner::user_image);
+                        physical_address, memory::physical::PageOwner::user_image,
+                        space.isolation_domain());
                 }
                 rollback(space, image);
                 reject();
@@ -264,7 +268,8 @@ bool load(memory::virtual_memory::AddressSpace& space, const void* data, usize s
                 const usize chunk = static_cast<usize>(
                     remaining < memory::physical::kPageSize ? remaining : memory::physical::kPageSize);
                 auto* destination = static_cast<u8*>(memory::physical::direct_map_owned(
-                    physical_address, memory::physical::PageOwner::user_image));
+                    physical_address, memory::physical::PageOwner::user_image,
+                    space.isolation_domain()));
                 if (destination == nullptr) {
                     rollback(space, image);
                     reject();
@@ -303,7 +308,8 @@ bool unload(memory::virtual_memory::AddressSpace& space, Image& image) {
         const Page page = image.pages[image.page_count];
         if (!memory::virtual_memory::unmap(space, page.virtual_address) ||
             !memory::physical::free_page(page.physical_address,
-                                         memory::physical::PageOwner::user_image)) {
+                                         memory::physical::PageOwner::user_image,
+                                         space.isolation_domain())) {
             success = false;
         }
         image.pages[image.page_count] = {};

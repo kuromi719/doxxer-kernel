@@ -55,7 +55,8 @@ bool copy_bytes(virtual_memory::AddressSpace& space, u64 user_address, u8* kerne
         const usize page_remaining =
             static_cast<usize>(physical::kPageSize - (current & (physical::kPageSize - 1)));
         const usize chunk = (length - copied) < page_remaining ? (length - copied) : page_remaining;
-        auto* user_bytes = static_cast<u8*>(physical::direct_map_user(mapping.physical_address));
+        auto* user_bytes = static_cast<u8*>(
+            physical::direct_map_user(mapping.physical_address, space.isolation_domain()));
         if (user_bytes == nullptr) {
             return false;
         }
@@ -94,7 +95,11 @@ bool validate_range(virtual_memory::AddressSpace& space, u64 user_address, usize
     const u64 end = user_address + length;
     while (current < end) {
         virtual_memory::Mapping mapping{};
-        if (!virtual_memory::query(space, current, mapping) || !mapping_allows(mapping, access)) {
+        const bool executable = access == Access::execute;
+        if (!virtual_memory::query(space, current, mapping) || !mapping_allows(mapping, access) ||
+            !physical::user_mapping_allowed(
+                mapping.physical_address & ~(physical::kPageSize - 1), 1, executable,
+                space.isolation_domain())) {
             reject();
             return false;
         }
@@ -147,7 +152,8 @@ bool zero_user(virtual_memory::AddressSpace& space, u64 user_destination, usize 
         const usize page_remaining =
             static_cast<usize>(physical::kPageSize - (current & (physical::kPageSize - 1)));
         const usize chunk = (length - cleared) < page_remaining ? (length - cleared) : page_remaining;
-        auto* bytes = static_cast<u8*>(physical::direct_map_user(mapping.physical_address));
+        auto* bytes = static_cast<u8*>(
+            physical::direct_map_user(mapping.physical_address, space.isolation_domain()));
         if (bytes == nullptr) {
             reject();
             return false;
@@ -169,8 +175,10 @@ bool self_test() {
     u64 second_page = 0;
     constexpr u64 kUserBase = 0x40'0000ULL;
     if (!virtual_memory::create(space, 31) ||
-        !physical::allocate_page(first_page, physical::PageOwner::user_data) ||
-        !physical::allocate_page(second_page, physical::PageOwner::user_data) ||
+        !physical::allocate_page(first_page, physical::PageOwner::user_data,
+                                 physical::Zone::any, space.isolation_domain()) ||
+        !physical::allocate_page(second_page, physical::PageOwner::user_data,
+                                 physical::Zone::any, space.isolation_domain()) ||
         !virtual_memory::map(space, kUserBase, first_page,
                              virtual_memory::MapFlags::user |
                                  virtual_memory::MapFlags::write) ||
@@ -208,8 +216,10 @@ bool self_test() {
     }
     if (!virtual_memory::unmap(space, kUserBase) ||
         !virtual_memory::unmap(space, kUserBase + physical::kPageSize) ||
-        !physical::free_page(first_page, physical::PageOwner::user_data) ||
-        !physical::free_page(second_page, physical::PageOwner::user_data) ||
+        !physical::free_page(first_page, physical::PageOwner::user_data,
+                             space.isolation_domain()) ||
+        !physical::free_page(second_page, physical::PageOwner::user_data,
+                             space.isolation_domain()) ||
         !virtual_memory::destroy(space)) {
         last_failure = 5;
         return false;

@@ -188,6 +188,7 @@ bool inspect(security::capability::DomainHandle manager, security::capability::T
         info.exit_code = process->exit_code;
         info.address_space_root = process->address_space.root_physical();
         info.pcid = process->address_space.pcid();
+        info.isolation_domain = process->address_space.isolation_domain();
         for (usize index = 0; index < sizeof(info.name); ++index) {
             info.name[index] = process->name[index];
         }
@@ -339,6 +340,7 @@ bool self_test() {
     }
     if (!inspect(manager, process.control, info) || info.identifier == 0 ||
         info.state != State::ready || info.address_space_root == 0 || info.pcid == 0 ||
+        info.isolation_domain == memory::physical::kKernelDomain ||
         !names_equal(info.name, "doxxer-selftest")) {
         last_failure = 2;
         return false;

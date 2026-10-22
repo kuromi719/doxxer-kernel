@@ -22,6 +22,7 @@ constexpr u64 kTaskWindowIndex = 0xE8;
 u32 last_self_test_failure = 0;
 AddressSpace* active_space = nullptr;
 sync::SpinLock supervisor_windows_lock{};
+u64 next_isolation_domain = 1;
 
 class ConditionalLockGuard final {
   public:
@@ -336,6 +337,11 @@ bool create(AddressSpace& space, u16 pcid) {
         return false;
     }
     sync::LockGuard supervisor_guard(supervisor_windows_lock);
+    if (next_isolation_domain > 0xFFFF'FFFFULL) {
+        return false;
+    }
+    const auto isolation_domain =
+        static_cast<physical::IsolationDomain>(next_isolation_domain++);
     u64 root_physical = 0;
     PageTable* root = nullptr;
     if (!allocate_table(root_physical, root)) {
@@ -366,6 +372,7 @@ bool create(AddressSpace& space, u16 pcid) {
     }
     space.root_physical_ = root_physical;
     space.pcid_ = pcid;
+    space.isolation_domain_ = isolation_domain;
     space.owns_supervisor_windows_ = owns_supervisor_windows;
     return true;
 }
@@ -387,6 +394,7 @@ bool destroy(AddressSpace& space) {
     }
     space.root_physical_ = 0;
     space.pcid_ = 0;
+    space.isolation_domain_ = physical::kKernelDomain;
     space.owns_supervisor_windows_ = false;
     return success;
 }
@@ -416,7 +424,8 @@ bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlag
     }
     if (has_flag(flags, MapFlags::user) &&
         !physical::user_mapping_allowed(physical_address, size / kPageSize,
-                                        has_flag(flags, MapFlags::execute))) {
+                                        has_flag(flags, MapFlags::execute),
+                                        space.isolation_domain())) {
         return false;
     }
 
@@ -548,7 +557,7 @@ bool protect(AddressSpace& space, u64 virtual_address, MapFlags flags) {
         if (user && !physical::user_mapping_allowed(
                         pde & kAddressMask,
                         static_cast<u64>(PageSize::size_2m) / kPageSize,
-                        has_flag(flags, MapFlags::execute))) {
+                        has_flag(flags, MapFlags::execute), space.isolation_domain())) {
             return false;
         }
         pde = (pde & kAddressMask) | leaf_flags(flags, true);
@@ -562,7 +571,8 @@ bool protect(AddressSpace& space, u64 virtual_address, MapFlags flags) {
             return false;
         }
         if (user && !physical::user_mapping_allowed(pte & kAddressMask, 1,
-                                                     has_flag(flags, MapFlags::execute))) {
+                                                     has_flag(flags, MapFlags::execute),
+                                                     space.isolation_domain())) {
             return false;
         }
         pte = (pte & kAddressMask) | leaf_flags(flags, false);
@@ -583,6 +593,8 @@ bool self_test() {
     last_self_test_failure = 0;
     const physical::Statistics before = physical::statistics();
     AddressSpace space{};
+    AddressSpace foreign_space{};
+    physical::IsolationDomain space_domain = physical::kKernelDomain;
     u64 page = 0;
     u64 large_run = 0;
     u64 kernel_page = 0;
@@ -592,32 +604,50 @@ bool self_test() {
     bool kernel_page_allocated = false;
     bool stack_page_allocated = false;
     bool space_created = false;
+    bool foreign_space_created = false;
     const auto cleanup = [&]() {
+        if (foreign_space_created && foreign_space.valid()) {
+            destroy(foreign_space);
+        }
         if (space_created && space.valid()) {
             destroy(space);
         }
         if (page_allocated) {
-            physical::free_page(page, physical::PageOwner::user_image);
+            physical::free_page(page, physical::PageOwner::user_image, space_domain);
         }
         if (large_allocated) {
-            physical::free_contiguous(large_run, 512, physical::PageOwner::user_image);
+            physical::free_contiguous(large_run, 512, physical::PageOwner::user_image,
+                                      space_domain);
         }
         if (kernel_page_allocated) {
             physical::free_page(kernel_page, physical::PageOwner::kernel_heap);
         }
         if (stack_page_allocated) {
-            physical::free_page(stack_page, physical::PageOwner::user_stack);
+            physical::free_page(stack_page, physical::PageOwner::user_stack, space_domain);
         }
     };
 
     space_created = create(space, 17);
-    page_allocated = physical::allocate_page(page, physical::PageOwner::user_image);
+    foreign_space_created = create(foreign_space, 18);
+    if (!space_created || !foreign_space_created ||
+        space.isolation_domain() == physical::kKernelDomain ||
+        foreign_space.isolation_domain() == physical::kKernelDomain ||
+        space.isolation_domain() == foreign_space.isolation_domain()) {
+        last_self_test_failure = 11;
+        cleanup();
+        return false;
+    }
+    space_domain = space.isolation_domain();
+    page_allocated = physical::allocate_page(page, physical::PageOwner::user_image,
+                                               physical::Zone::any, space_domain);
     large_allocated = physical::allocate_contiguous(512, 512, large_run,
-                                                    physical::PageOwner::user_image);
+                                                    physical::PageOwner::user_image,
+                                                    physical::Zone::any, space_domain);
     kernel_page_allocated =
         physical::allocate_page(kernel_page, physical::PageOwner::kernel_heap);
     stack_page_allocated =
-        physical::allocate_page(stack_page, physical::PageOwner::user_stack);
+        physical::allocate_page(stack_page, physical::PageOwner::user_stack,
+                                physical::Zone::any, space_domain);
     if (!space_created || !page_allocated || !large_allocated || !kernel_page_allocated ||
         !stack_page_allocated || space.pcid() != 17) {
         last_self_test_failure = !space_created     ? 11
@@ -633,7 +663,13 @@ bool self_test() {
     constexpr u64 small_virtual = 0x0000'0040'0000'0000ULL;
     constexpr u64 large_virtual = 0x0000'0050'0000'0000ULL;
     constexpr u64 guard_virtual = small_virtual + kPageSize;
+    constexpr u64 foreign_virtual = 0x0000'0060'0000'0000ULL;
     if (is_canonical(0x0000'8000'0000'0000ULL) || is_canonical(0xFFFF'0000'0000'0000ULL) ||
+        map(foreign_space, foreign_virtual, page, MapFlags::user) ||
+        physical::direct_map_owned(page, physical::PageOwner::user_image,
+                                   foreign_space.isolation_domain()) != nullptr ||
+        physical::free_page(page, physical::PageOwner::user_image,
+                            foreign_space.isolation_domain()) ||
         map(space, 0xFFFF'8000'0000'0000ULL, page, MapFlags::none) ||
         map(space, guard_virtual, page, static_cast<MapFlags>(0x80)) ||
         map(space, guard_virtual, kernel_page, MapFlags::write | MapFlags::user) ||
@@ -674,7 +710,7 @@ bool self_test() {
     const u64 observed_probe = *hardware_alias;
     write_cr3(original_cr3);
     const auto* direct_page = static_cast<const volatile u64*>(
-        physical::direct_map_owned(page, physical::PageOwner::user_image));
+        physical::direct_map_owned(page, physical::PageOwner::user_image, space_domain));
     if (observed_probe != alias_probe || direct_page == nullptr || *direct_page != alias_probe) {
         last_self_test_failure = 4;
         cleanup();
@@ -694,16 +730,18 @@ bool self_test() {
         return false;
     }
 
-    if (!destroy(space)) {
+    if (!destroy(foreign_space) || !destroy(space)) {
         last_self_test_failure = 6;
         cleanup();
         return false;
     }
+    foreign_space_created = false;
     space_created = false;
-    if (!physical::free_page(page, physical::PageOwner::user_image) ||
-        !physical::free_contiguous(large_run, 512, physical::PageOwner::user_image) ||
+    if (!physical::free_page(page, physical::PageOwner::user_image, space_domain) ||
+        !physical::free_contiguous(large_run, 512, physical::PageOwner::user_image,
+                                   space_domain) ||
         !physical::free_page(kernel_page, physical::PageOwner::kernel_heap) ||
-        !physical::free_page(stack_page, physical::PageOwner::user_stack)) {
+        !physical::free_page(stack_page, physical::PageOwner::user_stack, space_domain)) {
         last_self_test_failure = 7;
         return false;
     }

@@ -27,6 +27,7 @@ struct Info {
     u32 exit_code;
     u64 address_space_root;
     u16 pcid;
+    memory::physical::IsolationDomain isolation_domain;
     char name[24];
 };
 

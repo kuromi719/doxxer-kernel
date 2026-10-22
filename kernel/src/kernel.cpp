@@ -373,6 +373,8 @@ extern "C" [[noreturn]] void kernel_main() {
     log::write_decimal(memory_stats.shadow_bytes);
     log::write(" / OWNER REJECTIONS: ");
     log::write_decimal(memory_stats.ownership_rejections);
+    log::write(" / DOMAIN REJECTIONS: ");
+    log::write_decimal(memory_stats.domain_rejections);
     log::write("\n");
     log::success("PMM ONLINE");
     log::success("SEALED SHADOW PAGE LEDGER ONLINE");
@@ -384,6 +386,12 @@ extern "C" [[noreturn]] void kernel_main() {
         panic("VIRTUAL MEMORY MANAGER SELF-TEST FAILED");
     }
     log::success("VMM ONLINE");
+    const memory::physical::Statistics isolated_memory_stats =
+        memory::physical::statistics();
+    log::write("[INFO] MEMORY DOMAIN REJECTIONS VERIFIED: ");
+    log::write_decimal(isolated_memory_stats.domain_rejections);
+    log::write("\n");
+    log::success("CROSS-DOMAIN RAM ISOLATION VERIFIED");
 
     if (!arch::x86_64::protection::initialize()) {
         panic("CPU PROTECTION INITIALIZATION FAILED");

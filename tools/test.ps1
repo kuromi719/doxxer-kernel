@@ -53,6 +53,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] PMM ONLINE',
         '[OK] SEALED SHADOW PAGE LEDGER ONLINE',
         '[OK] VMM ONLINE',
+        '[OK] CROSS-DOMAIN RAM ISOLATION VERIFIED',
         '[OK] GDT TSS IDT ONLINE',
         '[OK] CPU PRIVILEGE BOUNDARIES LOCKED',
         '[OK] KERNEL ELF PERMISSIONS VERIFIED',

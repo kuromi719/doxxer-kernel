@@ -216,7 +216,9 @@ bool smap_enforcement_valid() {
     constexpr u64 kProbeAddress = 0x0000'6000'0000'0000ULL;
     u64 physical_address = 0;
     if (!memory::physical::allocate_page(physical_address,
-                                         memory::physical::PageOwner::user_data)) {
+                                         memory::physical::PageOwner::user_data,
+                                         memory::physical::Zone::any,
+                                         kernel_space.isolation_domain())) {
         return false;
     }
     bool mapped = memory::virtual_memory::map(kernel_space, kProbeAddress, physical_address,
@@ -228,7 +230,8 @@ bool smap_enforcement_valid() {
         valid = false;
     }
     if (!memory::physical::free_page(physical_address,
-                                     memory::physical::PageOwner::user_data)) {
+                                     memory::physical::PageOwner::user_data,
+                                     kernel_space.isolation_domain())) {
         valid = false;
     }
     return valid;
@@ -238,14 +241,18 @@ bool smep_enforcement_valid() {
     constexpr u64 kProbeAddress = 0x0000'6100'0000'0000ULL;
     u64 physical_address = 0;
     if (!memory::physical::allocate_page(physical_address,
-                                         memory::physical::PageOwner::user_image)) {
+                                         memory::physical::PageOwner::user_image,
+                                         memory::physical::Zone::any,
+                                         kernel_space.isolation_domain())) {
         return false;
     }
     auto* code = static_cast<u8*>(memory::physical::direct_map_owned(
-        physical_address, memory::physical::PageOwner::user_image));
+        physical_address, memory::physical::PageOwner::user_image,
+        kernel_space.isolation_domain()));
     if (code == nullptr) {
         (void)memory::physical::free_page(physical_address,
-                                          memory::physical::PageOwner::user_image);
+                                          memory::physical::PageOwner::user_image,
+                                          kernel_space.isolation_domain());
         return false;
     }
     code[0] = 0xC3;
@@ -258,7 +265,8 @@ bool smep_enforcement_valid() {
         valid = false;
     }
     if (!memory::physical::free_page(physical_address,
-                                     memory::physical::PageOwner::user_image)) {
+                                     memory::physical::PageOwner::user_image,
+                                     kernel_space.isolation_domain())) {
         valid = false;
     }
     return valid;
