@@ -10,6 +10,8 @@ into an explicit address space.
 - The entry point must lie inside an executable load segment.
 - Pages are allocated zeroed, staged writable and non-executable, populated, then protected with
   their final W^X permissions.
+- Segment bytes are populated through a short-lived supervisor-only, NX per-CPU mapping rather
+  than through the inherited broad physical direct map.
 - Any failure rolls back every page-table mapping and physical allocation.
 
 The boot test loads synthetic code and data segments, verifies permissions and zero-filled BSS,

@@ -37,6 +37,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Pointer-free versioned syscall request ABI for IPC, events, and process control
 - Capability service registry with validated names and revocable attenuated resolution
 - Page-aware user-memory validation and bounded copy helpers with no user-pointer dereference
+- Per-CPU supervisor-only, NX temporary windows for runtime access to user-owned physical pages
 - Strict ELF64 loader with transactional rollback, W^X segments, and zeroed BSS
 - Closed-by-default executable policy with SHA-256 measurements and irreversible boot-time sealing
 - Capability-owned user-thread contexts with pinned process spaces and guarded stacks
@@ -103,6 +104,7 @@ Artifacts are written to `build/doxxer-kernel.elf`, `dist/doxxer-uefi.img`, and 
 See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
 [`docs/MEMORY_ISOLATION.md`](docs/MEMORY_ISOLATION.md) for the shadow ownership ledger,
 [`docs/MEMORY_DOMAINS.md`](docs/MEMORY_DOMAINS.md) for cross-address-space RAM isolation,
+[`docs/TEMPORARY_MAPPINGS.md`](docs/TEMPORARY_MAPPINGS.md) for ephemeral user-page access,
 [`docs/DMA_ISOLATION.md`](docs/DMA_ISOLATION.md) for default-deny VT-d policy,
 [`docs/CPU_HARDENING.md`](docs/CPU_HARDENING.md) for mandatory per-processor controls,
 [`docs/CPU_PROTECTION.md`](docs/CPU_PROTECTION.md) for descriptor, exception, and stack design,

@@ -362,6 +362,9 @@ extern "C" [[noreturn]] void kernel_main() {
         panic("PHYSICAL MEMORY MANAGER INITIALIZATION FAILED");
     }
     if (!memory::physical::self_test()) {
+        log::write("[ERROR] PMM SELF-TEST STAGE: ");
+        log::write_decimal(memory::physical::self_test_failure());
+        log::write("\n");
         panic("PHYSICAL MEMORY MANAGER SELF-TEST FAILED");
     }
     const memory::physical::Statistics memory_stats = memory::physical::statistics();
@@ -417,6 +420,16 @@ extern "C" [[noreturn]] void kernel_main() {
     log::success("KERNEL ELF PERMISSIONS VERIFIED");
     log::success("SMAP ENFORCEMENT PROBED");
     log::success("SMEP ENFORCEMENT PROBED");
+    const memory::virtual_memory::TemporaryMappingStatistics temporary_stats =
+        memory::virtual_memory::temporary_mapping_statistics();
+    log::write("[INFO] TEMPORARY USER WINDOWS: ");
+    log::write_decimal(temporary_stats.mappings);
+    log::write(" MAPS / ");
+    log::write_decimal(temporary_stats.unmappings);
+    log::write(" UNMAPS / ");
+    log::write_decimal(temporary_stats.failures);
+    log::write(" FAILURES\n");
+    log::success("EPHEMERAL USER MEMORY WINDOWS VERIFIED");
     log::success("SUPERVISOR STACK WINDOWS ISOLATED");
     log::success("EXCEPTION AND GUARD SELF-TEST PASSED");
     arch::x86_64::protection::enter_kernel_stack(protected_kernel_main);

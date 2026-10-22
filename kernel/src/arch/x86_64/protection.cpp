@@ -246,16 +246,19 @@ bool smep_enforcement_valid() {
                                          kernel_space.isolation_domain())) {
         return false;
     }
-    auto* code = static_cast<u8*>(memory::physical::direct_map_owned(
-        physical_address, memory::physical::PageOwner::user_image,
-        kernel_space.isolation_domain()));
-    if (code == nullptr) {
+    memory::virtual_memory::TemporaryMapping temporary{};
+    if (!memory::virtual_memory::map_temporary_user(kernel_space, physical_address, true,
+                                                    temporary)) {
         (void)memory::physical::free_page(physical_address,
                                           memory::physical::PageOwner::user_image,
                                           kernel_space.isolation_domain());
         return false;
     }
+    auto* code = static_cast<u8*>(temporary.address);
     code[0] = 0xC3;
+    if (!memory::virtual_memory::unmap_temporary_user(temporary)) {
+        return false;
+    }
     bool mapped = memory::virtual_memory::map(kernel_space, kProbeAddress, physical_address,
                                                MapFlags::user | MapFlags::execute);
     bool valid = mapped && interrupts::probe_execution_fault(
@@ -348,7 +351,7 @@ bool self_test() {
         !stack_layout_valid(exception_stack) || !stack_layout_valid(emergency_stack) ||
         !descriptor_state_valid() || !hardening::verify_current_processor() ||
         !kernel_image_permissions_valid() || !smap_enforcement_valid() ||
-        !smep_enforcement_valid()) {
+        !smep_enforcement_valid() || !memory::virtual_memory::temporary_windows_idle()) {
         return false;
     }
     if (!supervisor_windows_valid()) {

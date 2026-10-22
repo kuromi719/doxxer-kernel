@@ -61,7 +61,6 @@ bool free_contiguous(u64 physical_address, u64 page_count, PageOwner owner,
                      IsolationDomain domain = kKernelDomain);
 void* direct_map_owned(u64 physical_address, PageOwner owner,
                        IsolationDomain domain = kKernelDomain);
-void* direct_map_user(u64 physical_address, IsolationDomain domain);
 void* direct_map_page_table(u64 physical_address);
 void* direct_map_firmware(u64 physical_address);
 bool owner_of(u64 physical_address, PageOwner& owner);
@@ -73,4 +72,5 @@ bool retain_user_mapping(u64 physical_address, u64 page_count, bool executable,
 bool release_user_mapping(u64 physical_address, u64 page_count, IsolationDomain domain);
 Statistics statistics();
 bool self_test();
+u32 self_test_failure();
 }

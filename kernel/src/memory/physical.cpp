@@ -7,6 +7,7 @@ extern "C" void* memset(void* destination, int value, doxxer::usize count);
 
 namespace doxxer::memory::physical {
 namespace {
+u32 last_self_test_failure = 0;
 struct Bitmap {
     u8* bytes = nullptr;
     u64 bit_count = 0;
@@ -546,7 +547,7 @@ void* direct_map_owned(u64 physical_address, PageOwner owner, IsolationDomain do
     return reinterpret_cast<void*>(static_cast<uptr>(state.hhdm_offset + physical_address));
 }
 
-void* direct_map_user(u64 physical_address, IsolationDomain domain) {
+static void* direct_map_user_for_self_test(u64 physical_address, IsolationDomain domain) {
     if (!state.initialized || domain == kKernelDomain ||
         state.hhdm_offset > static_cast<u64>(-1) - physical_address) {
         if (domain == kKernelDomain) {
@@ -717,15 +718,15 @@ bool release_user_mapping(u64 physical_address, u64 page_count, IsolationDomain 
     if (!user_range_valid_locked(first_page, page_count, false, domain)) {
         return false;
     }
-    if (state.user_mapping_references < page_count) {
-        ++state.integrity_failures;
-        return false;
-    }
     for (u64 index = 0; index < page_count; ++index) {
         if (state.shadow[first_page + index].mapping_references == 0) {
             __atomic_add_fetch(&state.mapping_rejections, 1ULL, __ATOMIC_RELAXED);
             return false;
         }
+    }
+    if (state.user_mapping_references < page_count) {
+        ++state.integrity_failures;
+        return false;
     }
     for (u64 index = 0; index < page_count; ++index) {
         ShadowEntry& entry = state.shadow[first_page + index];
@@ -761,7 +762,9 @@ Statistics statistics() {
 }
 
 bool self_test() {
+    last_self_test_failure = 0;
     if (!state.initialized) {
+        last_self_test_failure = 1;
         return false;
     }
     const Statistics before = statistics();
@@ -800,6 +803,7 @@ bool self_test() {
     single_allocated = allocate_page(single, PageOwner::test);
     run_allocated = allocate_contiguous(3, 4, run, PageOwner::test);
     if (!single_allocated || !run_allocated || run % (4 * kPageSize) != 0 || single == run) {
+        last_self_test_failure = 2;
         cleanup();
         return false;
     }
@@ -807,6 +811,7 @@ bool self_test() {
     if (before.dma32_free_pages != 0) {
         dma32_allocated = allocate_page(dma32, PageOwner::test, Zone::dma32);
         if (!dma32_allocated || dma32 >= kDma32Limit) {
+            last_self_test_failure = 3;
             cleanup();
             return false;
         }
@@ -814,6 +819,7 @@ bool self_test() {
     if (before.normal_free_pages != 0) {
         normal_allocated = allocate_page(normal, PageOwner::test, Zone::normal);
         if (!normal_allocated || normal < kDma32Limit) {
+            last_self_test_failure = 4;
             cleanup();
             return false;
         }
@@ -821,6 +827,7 @@ bool self_test() {
 
     u64 invalid_alignment_result = 0;
     if (allocate_contiguous(1, 3, invalid_alignment_result, PageOwner::test)) {
+        last_self_test_failure = 5;
         cleanup();
         return false;
     }
@@ -840,6 +847,7 @@ bool self_test() {
         !zero_sampled(static_cast<const u8*>(direct_map_owned(run, PageOwner::test))) ||
         direct_map_owned(single, PageOwner::kernel_heap) != nullptr ||
         free_page(single, PageOwner::kernel_heap)) {
+        last_self_test_failure = 6;
         cleanup();
         return false;
     }
@@ -849,10 +857,11 @@ bool self_test() {
         allocate_page(domain_page, PageOwner::user_data, Zone::any, 7);
     if (!domain_page_allocated ||
         allocate_page(invalid_domain_page, PageOwner::user_data) ||
-        direct_map_user(domain_page, 8) != nullptr ||
+        direct_map_user_for_self_test(domain_page, 8) != nullptr ||
         free_page(domain_page, PageOwner::user_data, 8) ||
         supervisor_mapping_allowed(domain_page, 1) ||
-        !zero_sampled(static_cast<const u8*>(direct_map_user(domain_page, 7)))) {
+        !zero_sampled(static_cast<const u8*>(direct_map_user_for_self_test(domain_page, 7)))) {
+        last_self_test_failure = 7;
         cleanup();
         return false;
     }
@@ -860,11 +869,13 @@ bool self_test() {
     if (!domain_mapping_retained || free_page(domain_page, PageOwner::user_data, 7) ||
         release_user_mapping(domain_page, 1, 8) ||
         !release_user_mapping(domain_page, 1, 7)) {
+        last_self_test_failure = 8;
         cleanup();
         return false;
     }
     domain_mapping_retained = false;
     if (release_user_mapping(domain_page, 1, 7)) {
+        last_self_test_failure = 9;
         cleanup();
         return false;
     }
@@ -877,15 +888,28 @@ bool self_test() {
     domain_page_allocated = false;
     domain_mapping_retained = false;
     if (free_page(single, PageOwner::test)) {
+        last_self_test_failure = 10;
         return false;
     }
     const Statistics after = statistics();
-    return verify_shadow_ledger() && before.free_pages == after.free_pages &&
-           before.allocated_pages == after.allocated_pages &&
-           after.integrity_failures == before.integrity_failures &&
-           after.ownership_rejections == before.ownership_rejections + 3 &&
-           after.domain_rejections == before.domain_rejections + 4 &&
-           after.mapping_rejections == before.mapping_rejections + 3 &&
-           after.user_mapping_references == before.user_mapping_references;
+    if (!verify_shadow_ledger()) {
+        last_self_test_failure = 11;
+    } else if (before.free_pages != after.free_pages ||
+               before.allocated_pages != after.allocated_pages) {
+        last_self_test_failure = 12;
+    } else if (after.integrity_failures != before.integrity_failures) {
+        last_self_test_failure = 13;
+    } else if (after.ownership_rejections != before.ownership_rejections + 3) {
+        last_self_test_failure = 14;
+    } else if (after.domain_rejections != before.domain_rejections + 4) {
+        last_self_test_failure = 15;
+    } else if (after.mapping_rejections != before.mapping_rejections + 3) {
+        last_self_test_failure = 16;
+    } else if (after.user_mapping_references != before.user_mapping_references) {
+        last_self_test_failure = 17;
+    }
+    return last_self_test_failure == 0;
 }
+
+u32 self_test_failure() { return last_self_test_failure; }
 }

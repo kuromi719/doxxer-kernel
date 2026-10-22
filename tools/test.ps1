@@ -60,6 +60,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] KERNEL ELF PERMISSIONS VERIFIED',
         '[OK] SMAP ENFORCEMENT PROBED',
         '[OK] SMEP ENFORCEMENT PROBED',
+        '[OK] EPHEMERAL USER MEMORY WINDOWS VERIFIED',
         '[OK] SUPERVISOR STACK WINDOWS ISOLATED',
         '[OK] EXCEPTION AND GUARD SELF-TEST PASSED',
         '[OK] GUARDED KERNEL STACK ACTIVE',

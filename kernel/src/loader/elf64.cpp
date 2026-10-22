@@ -267,17 +267,22 @@ bool load(memory::virtual_memory::AddressSpace& space, const void* data, usize s
                 const u64 remaining = segment.file_size - file_position;
                 const usize chunk = static_cast<usize>(
                     remaining < memory::physical::kPageSize ? remaining : memory::physical::kPageSize);
-                auto* destination = static_cast<u8*>(memory::physical::direct_map_owned(
-                    physical_address, memory::physical::PageOwner::user_image,
-                    space.isolation_domain()));
-                if (destination == nullptr) {
+                memory::virtual_memory::TemporaryMapping temporary{};
+                if (!memory::virtual_memory::map_temporary_user(
+                        space, physical_address, true, temporary)) {
                     rollback(space, image);
                     reject();
                     return false;
                 }
+                auto* destination = static_cast<u8*>(temporary.address);
                 const u8* source = bytes + static_cast<usize>(segment.offset + file_position);
                 for (usize byte = 0; byte < chunk; ++byte) {
                     destination[byte] = source[byte];
+                }
+                if (!memory::virtual_memory::unmap_temporary_user(temporary)) {
+                    rollback(space, image);
+                    reject();
+                    return false;
                 }
             }
         }

@@ -34,10 +34,12 @@ metadata is detected as an integrity failure.
 Boot self-tests allocate two independent address spaces and verify that cross-domain page mapping,
 supervisor-alias insertion, direct access, and release all fail while the owning domain retains
 access. They also prove that a live mapping blocks release and that the page becomes releasable only
-after its final mapping reference is removed. Pages continue to be zeroed on both allocation and
+after its final mapping reference is removed. Runtime user-page access additionally requires a
+domain-checked ephemeral supervisor window. Pages continue to be zeroed on both allocation and
 release.
 
 Memory domains prevent accidental or confused-deputy cross-process RAM reuse through supported
 kernel APIs. They do not protect against arbitrary code execution in the kernel or physical attacks.
-Removing the inherited broad direct map and replacing it with short-lived mapping windows remains a
-separate hardening milestone.
+The inherited broad direct map remains a bootstrap and page-table-editing dependency. Routine
+user-page access has moved to short-lived per-CPU windows; removing the remaining inherited alias
+requires Doxxer-owned bootstrap page tables.

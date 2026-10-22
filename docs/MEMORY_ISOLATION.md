@@ -32,7 +32,9 @@ and allocation-accounting restoration.
 
 This is defense in depth against memory-lifecycle bugs and cross-subsystem confusion; it is not a
 claim that software can make RAM unreadable to a CPU already executing fully compromised kernel
-code. The current prototype also trusts its firmware-created bootstrap page tables until Doxxer
-switches to its own tables. Later milestones should remove the broad bootstrap direct map, use
-short-lived per-CPU mapping windows, add guard pages to more object classes, and enable hardware RAM
-encryption and measured boot on platforms that provide them.
+code. The runtime loader, user-copy layer, and privilege probes now access user-owned RAM through
+short-lived per-CPU supervisor-only NX windows. The current prototype still trusts its
+firmware-created bootstrap page tables and uses their broad direct map for allocator bootstrap and
+page-table editing. Later milestones should replace those mappings with Doxxer-owned bootstrap
+tables and dedicated editing windows, add guard pages to more object classes, and enable hardware
+RAM encryption and measured boot on platforms that provide them.

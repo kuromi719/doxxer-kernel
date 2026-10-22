@@ -19,9 +19,17 @@ constexpr u64 kPcidMaximum = 4095;
 constexpr u64 kProtectionWindowIndex = 0xE0;
 constexpr u64 kCpuWindowIndex = 0xE4;
 constexpr u64 kTaskWindowIndex = 0xE8;
+constexpr u64 kTemporaryWindowIndex = 0xEC;
+constexpr u64 kTemporaryWindowBase = kTemporaryWindowIndex << 39U;
+constexpr u16 kTemporarySlotCount = 256;
 u32 last_self_test_failure = 0;
 AddressSpace* active_space = nullptr;
 sync::SpinLock supervisor_windows_lock{};
+sync::SpinLock temporary_slot_locks[kTemporarySlotCount]{};
+bool temporary_slot_active[kTemporarySlotCount]{};
+u64 temporary_mappings = 0;
+u64 temporary_unmappings = 0;
+u64 temporary_failures = 0;
 u64 next_isolation_domain = 1;
 
 class ConditionalLockGuard final {
@@ -55,7 +63,31 @@ constexpr u64 pd_index(u64 address) { return (address >> 21U) & 0x1FFU; }
 constexpr u64 pt_index(u64 address) { return (address >> 12U) & 0x1FFU; }
 constexpr bool supervisor_window_index(u64 index) {
     return index == kProtectionWindowIndex || index == kCpuWindowIndex ||
-           index == kTaskWindowIndex;
+           index == kTaskWindowIndex || index == kTemporaryWindowIndex;
+}
+
+u16 current_temporary_slot() {
+    u32 eax = 1;
+    u32 ebx = 0;
+    u32 ecx = 0;
+    u32 edx = 0;
+    asm volatile("cpuid"
+                 : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx)
+                 :
+                 : "memory");
+    return static_cast<u16>(ebx >> 24U);
+}
+
+u64 disable_interrupts() {
+    u64 rflags = 0;
+    asm volatile("pushfq; popq %0; cli" : "=r"(rflags) : : "memory");
+    return rflags;
+}
+
+void restore_interrupts(u64 rflags) {
+    if ((rflags & (1ULL << 9U)) != 0) {
+        asm volatile("sti" : : : "memory");
+    }
 }
 
 PageTable* table_from_physical(u64 physical_address) {
@@ -403,7 +435,8 @@ bool create(AddressSpace& space, u16 pcid) {
         PageTable* window = nullptr;
         if (!next_table(root->entries[kProtectionWindowIndex], false, true, window) ||
             !next_table(root->entries[kCpuWindowIndex], false, true, window) ||
-            !next_table(root->entries[kTaskWindowIndex], false, true, window)) {
+            !next_table(root->entries[kTaskWindowIndex], false, true, window) ||
+            !next_table(root->entries[kTemporaryWindowIndex], false, true, window)) {
             destroy_user_half(root, true);
             physical::free_page(root_physical, physical::PageOwner::page_table);
             return false;
@@ -412,6 +445,7 @@ bool create(AddressSpace& space, u16 pcid) {
         root->entries[kProtectionWindowIndex] = active_root->entries[kProtectionWindowIndex];
         root->entries[kCpuWindowIndex] = active_root->entries[kCpuWindowIndex];
         root->entries[kTaskWindowIndex] = active_root->entries[kTaskWindowIndex];
+        root->entries[kTemporaryWindowIndex] = active_root->entries[kTemporaryWindowIndex];
     }
     space.root_physical_ = root_physical;
     space.pcid_ = pcid;
@@ -655,6 +689,142 @@ bool query(AddressSpace& space, u64 virtual_address, Mapping& mapping) {
                                                : nullptr);
     sync::LockGuard guard(space.lock_);
     return query_unlocked(space, virtual_address, mapping);
+}
+
+bool map_temporary_user(AddressSpace& owner_space, u64 physical_address, bool writable,
+                        TemporaryMapping& mapping) {
+    if (mapping.active || mapping.address != nullptr || !owner_space.valid() ||
+        owner_space.isolation_domain() == physical::kKernelDomain || active_space == nullptr ||
+        !active_space->valid() || !active_space->owns_supervisor_windows()) {
+        __atomic_add_fetch(&temporary_failures, 1ULL, __ATOMIC_RELAXED);
+        return false;
+    }
+    const u64 physical_page = physical_address & ~(kPageSize - 1);
+    const u64 page_offset = physical_address & (kPageSize - 1);
+    const u16 slot = current_temporary_slot();
+    const u64 saved_rflags = disable_interrupts();
+    sync::SpinLock& slot_lock = temporary_slot_locks[slot];
+    if (__atomic_load_n(&temporary_slot_active[slot], __ATOMIC_ACQUIRE)) {
+        __atomic_add_fetch(&temporary_failures, 1ULL, __ATOMIC_RELAXED);
+        restore_interrupts(saved_rflags);
+        return false;
+    }
+    slot_lock.lock();
+    if (__atomic_load_n(&temporary_slot_active[slot], __ATOMIC_ACQUIRE) ||
+        !physical::retain_user_mapping(physical_page, 1, false,
+                                       owner_space.isolation_domain())) {
+        __atomic_add_fetch(&temporary_failures, 1ULL, __ATOMIC_RELAXED);
+        slot_lock.unlock();
+        restore_interrupts(saved_rflags);
+        return false;
+    }
+
+    const u64 virtual_address = kTemporaryWindowBase + static_cast<u64>(slot) * kPageSize;
+    bool installed = false;
+    {
+        sync::LockGuard supervisor_guard(supervisor_windows_lock);
+        sync::LockGuard space_guard(active_space->lock_);
+        PageTable* pml4 = table_from_physical(active_space->root_physical());
+        PageTable* pdpt = nullptr;
+        PageTable* pd = nullptr;
+        PageTable* pt = nullptr;
+        if (pml4 != nullptr) {
+            u64& pml4e = pml4->entries[pml4_index(virtual_address)];
+            if (next_table(pml4e, false, true, pdpt)) {
+                u64& pdpte = pdpt->entries[pdpt_index(virtual_address)];
+                if (next_table(pdpte, false, true, pd)) {
+                    u64& pde = pd->entries[pd_index(virtual_address)];
+                    if (next_table(pde, false, true, pt)) {
+                        u64& pte = pt->entries[pt_index(virtual_address)];
+                        if ((pte & kPresent) == 0) {
+                            pte = physical_page |
+                                  leaf_flags(writable ? MapFlags::write : MapFlags::none, false);
+                            invalidate_if_active(*active_space, virtual_address);
+                            installed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if (!installed) {
+            prune_empty_path(*active_space, virtual_address);
+        }
+    }
+    if (!installed) {
+        (void)physical::release_user_mapping(physical_page, 1,
+                                             owner_space.isolation_domain());
+        __atomic_add_fetch(&temporary_failures, 1ULL, __ATOMIC_RELAXED);
+        slot_lock.unlock();
+        restore_interrupts(saved_rflags);
+        return false;
+    }
+
+    __atomic_store_n(&temporary_slot_active[slot], true, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&temporary_mappings, 1ULL, __ATOMIC_RELAXED);
+    mapping = {
+        .address = reinterpret_cast<void*>(
+            static_cast<uptr>(virtual_address + page_offset)),
+        .address_space_cookie = active_space,
+        .physical_page = physical_page,
+        .domain = owner_space.isolation_domain(),
+        .saved_rflags = saved_rflags,
+        .slot = slot,
+        .active = true,
+    };
+    return true;
+}
+
+bool unmap_temporary_user(TemporaryMapping& mapping) {
+    if (!mapping.active || mapping.address == nullptr || mapping.address_space_cookie == nullptr ||
+        mapping.slot >= kTemporarySlotCount || current_temporary_slot() != mapping.slot) {
+        __atomic_add_fetch(&temporary_failures, 1ULL, __ATOMIC_RELAXED);
+        return false;
+    }
+    auto* space = static_cast<AddressSpace*>(mapping.address_space_cookie);
+    const u16 slot = mapping.slot;
+    const u64 physical_page = mapping.physical_page;
+    const physical::IsolationDomain domain = mapping.domain;
+    const u64 saved_rflags = mapping.saved_rflags;
+    const u64 virtual_address = kTemporaryWindowBase + static_cast<u64>(slot) * kPageSize;
+
+    if (!__atomic_load_n(&temporary_slot_active[slot], __ATOMIC_ACQUIRE) ||
+        !unmap(*space, virtual_address)) {
+        __atomic_add_fetch(&temporary_failures, 1ULL, __ATOMIC_RELAXED);
+        mapping = {};
+        temporary_slot_locks[slot].unlock();
+        restore_interrupts(saved_rflags);
+        return false;
+    }
+    __atomic_store_n(&temporary_slot_active[slot], false, __ATOMIC_RELEASE);
+    const bool released = physical::release_user_mapping(physical_page, 1, domain);
+    if (released) {
+        __atomic_add_fetch(&temporary_unmappings, 1ULL, __ATOMIC_RELAXED);
+    } else {
+        __atomic_add_fetch(&temporary_failures, 1ULL, __ATOMIC_RELAXED);
+    }
+    mapping = {};
+    temporary_slot_locks[slot].unlock();
+    restore_interrupts(saved_rflags);
+    return released;
+}
+
+TemporaryMappingStatistics temporary_mapping_statistics() {
+    return {
+        .mappings = __atomic_load_n(&temporary_mappings, __ATOMIC_RELAXED),
+        .unmappings = __atomic_load_n(&temporary_unmappings, __ATOMIC_RELAXED),
+        .failures = __atomic_load_n(&temporary_failures, __ATOMIC_RELAXED),
+    };
+}
+
+bool temporary_windows_idle() {
+    for (u16 slot = 0; slot < kTemporarySlotCount; ++slot) {
+        if (__atomic_load_n(&temporary_slot_active[slot], __ATOMIC_ACQUIRE)) {
+            return false;
+        }
+    }
+    const TemporaryMappingStatistics current = temporary_mapping_statistics();
+    return current.mappings != 0 && current.mappings == current.unmappings &&
+           current.failures == 0;
 }
 
 bool self_test() {

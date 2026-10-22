@@ -55,17 +55,21 @@ bool copy_bytes(virtual_memory::AddressSpace& space, u64 user_address, u8* kerne
         const usize page_remaining =
             static_cast<usize>(physical::kPageSize - (current & (physical::kPageSize - 1)));
         const usize chunk = (length - copied) < page_remaining ? (length - copied) : page_remaining;
-        auto* user_bytes = static_cast<u8*>(
-            physical::direct_map_user(mapping.physical_address, space.isolation_domain()));
-        if (user_bytes == nullptr) {
+        virtual_memory::TemporaryMapping temporary{};
+        if (!virtual_memory::map_temporary_user(space, mapping.physical_address, to_user,
+                                                temporary)) {
             return false;
         }
+        auto* user_bytes = static_cast<u8*>(temporary.address);
         for (usize index = 0; index < chunk; ++index) {
             if (to_user) {
                 user_bytes[index] = kernel_buffer[copied + index];
             } else {
                 kernel_buffer[copied + index] = user_bytes[index];
             }
+        }
+        if (!virtual_memory::unmap_temporary_user(temporary)) {
+            return false;
         }
         copied += chunk;
     }
@@ -152,14 +156,19 @@ bool zero_user(virtual_memory::AddressSpace& space, u64 user_destination, usize 
         const usize page_remaining =
             static_cast<usize>(physical::kPageSize - (current & (physical::kPageSize - 1)));
         const usize chunk = (length - cleared) < page_remaining ? (length - cleared) : page_remaining;
-        auto* bytes = static_cast<u8*>(
-            physical::direct_map_user(mapping.physical_address, space.isolation_domain()));
-        if (bytes == nullptr) {
+        virtual_memory::TemporaryMapping temporary{};
+        if (!virtual_memory::map_temporary_user(space, mapping.physical_address, true,
+                                                temporary)) {
             reject();
             return false;
         }
+        auto* bytes = static_cast<u8*>(temporary.address);
         for (usize index = 0; index < chunk; ++index) {
             bytes[index] = 0;
+        }
+        if (!virtual_memory::unmap_temporary_user(temporary)) {
+            reject();
+            return false;
         }
         cleared += chunk;
     }

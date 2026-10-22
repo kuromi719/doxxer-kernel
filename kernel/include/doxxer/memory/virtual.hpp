@@ -33,6 +33,22 @@ struct Mapping {
     MapFlags flags;
 };
 
+struct TemporaryMapping {
+    void* address = nullptr;
+    void* address_space_cookie = nullptr;
+    u64 physical_page = 0;
+    physical::IsolationDomain domain = physical::kKernelDomain;
+    u64 saved_rflags = 0;
+    u16 slot = 0;
+    bool active = false;
+};
+
+struct TemporaryMappingStatistics {
+    u64 mappings = 0;
+    u64 unmappings = 0;
+    u64 failures = 0;
+};
+
 class AddressSpace final {
   public:
     AddressSpace() = default;
@@ -52,6 +68,8 @@ class AddressSpace final {
     friend bool unmap(AddressSpace&, u64);
     friend bool protect(AddressSpace&, u64, MapFlags);
     friend bool query(AddressSpace&, u64, Mapping&);
+    friend bool map_temporary_user(AddressSpace&, u64, bool, TemporaryMapping&);
+    friend bool unmap_temporary_user(TemporaryMapping&);
 
     u64 root_physical_ = 0;
     u16 pcid_ = 0;
@@ -69,6 +87,11 @@ bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlag
 bool unmap(AddressSpace& space, u64 virtual_address);
 bool protect(AddressSpace& space, u64 virtual_address, MapFlags flags);
 bool query(AddressSpace& space, u64 virtual_address, Mapping& mapping);
+bool map_temporary_user(AddressSpace& owner_space, u64 physical_address, bool writable,
+                        TemporaryMapping& mapping);
+bool unmap_temporary_user(TemporaryMapping& mapping);
+TemporaryMappingStatistics temporary_mapping_statistics();
+bool temporary_windows_idle();
 bool is_canonical(u64 virtual_address);
 bool self_test();
 u32 self_test_failure();
