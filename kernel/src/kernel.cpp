@@ -16,6 +16,7 @@
 #include <doxxer/scheduler/scheduler.hpp>
 #include <doxxer/security/capability.hpp>
 #include <doxxer/sync/event.hpp>
+#include <doxxer/syscall/dispatcher.hpp>
 
 namespace {
 [[noreturn]] void protected_kernel_main() {
@@ -99,6 +100,20 @@ namespace {
     log::write_decimal(process_stats.destroyed_processes);
     log::write(" DESTROYED\n");
     log::success("ISOLATED PROCESS CONTAINERS ONLINE");
+
+    if (!syscall::initialize() || !syscall::self_test()) {
+        log::write("[ERROR] SYSCALL ABI SELF-TEST STAGE: ");
+        log::write_decimal(syscall::failure_code());
+        log::write("\n");
+        panic("SYSCALL ABI SELF-TEST FAILED");
+    }
+    const syscall::Statistics syscall_stats = syscall::statistics();
+    log::write("[INFO] SYSCALL ABI: ");
+    log::write_decimal(syscall_stats.successful);
+    log::write(" ACCEPTED / ");
+    log::write_decimal(syscall_stats.rejected);
+    log::write(" REJECTED\n");
+    log::success("BOUNDED SYSCALL ABI ONLINE");
 
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");

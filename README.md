@@ -33,12 +33,14 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Capability-gated bounded IPC channels with split send, receive, and administration endpoints
 - Manual- and auto-reset capability events with non-blocking, allocation-free wait semantics
 - Isolated process containers with private address spaces, capability domains, and explicit lifecycle
+- Pointer-free versioned syscall request ABI for IPC, events, and process control
 - W^X-compatible ELF segments and non-executable stack
 - Bootable GPT/FAT disk image and UEFI ISO
 - Automated disk and ISO smoke tests
 - 128 MiB low-memory and 5 GiB high-memory QEMU coverage
 
-User mode, preemptive scheduling, networking, general drivers, Secure Boot, and physical-hardware support are intentionally deferred.
+Hardware syscall entry, user-mode execution, preemptive scheduling, networking, general drivers,
+Secure Boot, and physical-hardware support are intentionally deferred.
 
 ## Prerequisites
 
@@ -92,6 +94,10 @@ See [`docs/MEMORY.md`](docs/MEMORY.md) for the memory architecture,
 [`docs/SMP.md`](docs/SMP.md) for multiprocessor and CPU-local invariants,
 [`docs/SCHEDULER.md`](docs/SCHEDULER.md) for kernel task dispatch and isolation,
 [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) for the authority and object-lifetime model,
+[`docs/IPC.md`](docs/IPC.md) for bounded capability channels,
+[`docs/EVENTS.md`](docs/EVENTS.md) for synchronization objects,
+[`docs/PROCESSES.md`](docs/PROCESSES.md) for isolated process containers,
+[`docs/SYSCALL_ABI.md`](docs/SYSCALL_ABI.md) for the versioned syscall contract,
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the initial threat model, and
 [`SECURITY.md`](SECURITY.md) for reporting guidance.
 
