@@ -20,6 +20,7 @@
 #include <doxxer/service/registry.hpp>
 #include <doxxer/sync/event.hpp>
 #include <doxxer/syscall/dispatcher.hpp>
+#include <doxxer/thread/user_thread.hpp>
 
 namespace {
 [[noreturn]] void protected_kernel_main() {
@@ -155,6 +156,20 @@ namespace {
     log::write_decimal(loader_stats.mapped_pages);
     log::write("\n");
     log::success("HARDENED ELF64 LOADER ONLINE");
+
+    if (!thread::user::initialize() || !thread::user::self_test()) {
+        log::write("[ERROR] USER THREAD SELF-TEST STAGE: ");
+        log::write_decimal(thread::user::failure_code());
+        log::write("\n");
+        panic("USER THREAD CONTEXT SELF-TEST FAILED");
+    }
+    const thread::user::Statistics thread_stats = thread::user::statistics();
+    log::write("[INFO] USER THREAD LIFECYCLE: ");
+    log::write_decimal(thread_stats.created_threads);
+    log::write(" CREATED / ");
+    log::write_decimal(thread_stats.destroyed_threads);
+    log::write(" DESTROYED\n");
+    log::success("GUARDED USER THREAD CONTEXTS ONLINE");
 
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");

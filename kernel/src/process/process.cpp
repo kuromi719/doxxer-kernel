@@ -15,6 +15,7 @@ struct Process {
     u64 identifier = 0;
     State state = State::ready;
     u32 exit_code = 0;
+    u32 address_space_users = 0;
     char name[24]{};
     memory::virtual_memory::AddressSpace address_space{};
     security::capability::DomainHandle domain{};
@@ -88,13 +89,15 @@ Process* acquire_process(security::capability::DomainHandle manager,
         reject();
         return nullptr;
     }
+    bool valid = false;
     {
         sync::LockGuard guard(process->lock);
-        if (!process->active || process->destroying) {
-            security::capability::release(lease);
-            reject();
-            return nullptr;
-        }
+        valid = process->active && !process->destroying;
+    }
+    if (!valid) {
+        security::capability::release(lease);
+        reject();
+        return nullptr;
     }
     return process;
 }
@@ -143,6 +146,7 @@ bool create(security::capability::DomainHandle manager, const char* name, Create
         }
         const auto control_rights = security::capability::Right::inspect |
                                     security::capability::Right::administer |
+                                    security::capability::Right::map |
                                     security::capability::Right::derive |
                                     security::capability::Right::transfer;
         if (!security::capability::grant(manager, process.object, control_rights,
@@ -156,6 +160,7 @@ bool create(security::capability::DomainHandle manager, const char* name, Create
         process.identifier = next_identifier++;
         process.state = State::ready;
         process.exit_code = 0;
+        process.address_space_users = 0;
         process.destroying = false;
         process.active = true;
         result.handle = {.slot = index, .generation = process.generation};
@@ -230,18 +235,21 @@ bool destroy(security::capability::DomainHandle manager, security::capability::T
     }
     security::capability::ObjectHandle object{};
     security::capability::DomainHandle domain{};
+    bool destroyable = false;
     {
         sync::LockGuard guard(process->lock);
-        if (process->state != State::exited) {
-            security::capability::release(lease);
-            reject();
-            return false;
+        if (process->state == State::exited && process->address_space_users == 0) {
+            process->destroying = true;
+            object = process->object;
+            domain = process->domain;
+            destroyable = true;
         }
-        process->destroying = true;
-        object = process->object;
-        domain = process->domain;
     }
     security::capability::release(lease);
+    if (!destroyable) {
+        reject();
+        return false;
+    }
     if (!memory::virtual_memory::destroy(process->address_space) ||
         !security::capability::destroy_domain(domain) ||
         !security::capability::unregister_object(object)) {
@@ -255,6 +263,7 @@ bool destroy(security::capability::DomainHandle manager, security::capability::T
         process->identifier = 0;
         process->state = State::ready;
         process->exit_code = 0;
+        process->address_space_users = 0;
         process->domain = {};
         process->object = {};
         process->generation = next_generation(process->generation);
@@ -264,6 +273,58 @@ bool destroy(security::capability::DomainHandle manager, security::capability::T
     }
     __atomic_add_fetch(&destroyed_processes, 1ULL, __ATOMIC_RELAXED);
     return true;
+}
+
+bool acquire_address_space(security::capability::DomainHandle manager,
+                           security::capability::Token control, AddressSpaceLease& lease) {
+    lease = {};
+    security::capability::Lease capability_lease{};
+    Process* process = acquire_process(
+        manager, control, security::capability::rights(security::capability::Right::map),
+        capability_lease);
+    if (process == nullptr) {
+        return false;
+    }
+    bool success = false;
+    {
+        sync::LockGuard guard(process->lock);
+        if (process->active && !process->destroying &&
+            process->address_space_users != 0xFFFF'FFFFU) {
+            ++process->address_space_users;
+            lease = {
+                .space = &process->address_space,
+                .process_cookie = process,
+                .state = process->state,
+                .active = true,
+            };
+            success = true;
+        }
+    }
+    security::capability::release(capability_lease);
+    if (!success) {
+        reject();
+    }
+    return success;
+}
+
+void release_address_space(AddressSpaceLease& lease) {
+    if (!lease.active || lease.process_cookie == nullptr || lease.space == nullptr) {
+        reject();
+        lease = {};
+        return;
+    }
+    auto* process = static_cast<Process*>(lease.process_cookie);
+    {
+        sync::LockGuard guard(process->lock);
+        if (!process->active || process->address_space_users == 0 ||
+            &process->address_space != lease.space) {
+            reject();
+            lease = {};
+            return;
+        }
+        --process->address_space_users;
+    }
+    lease = {};
 }
 
 bool self_test() {

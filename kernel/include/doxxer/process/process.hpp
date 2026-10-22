@@ -1,6 +1,7 @@
 #pragma once
 
 #include <doxxer/security/capability.hpp>
+#include <doxxer/memory/virtual.hpp>
 #include <doxxer/types.hpp>
 
 namespace doxxer::process {
@@ -37,6 +38,13 @@ struct Statistics {
     u64 rejected_operations;
 };
 
+struct AddressSpaceLease {
+    memory::virtual_memory::AddressSpace* space;
+    void* process_cookie;
+    State state;
+    bool active;
+};
+
 bool initialize();
 bool create(security::capability::DomainHandle manager, const char* name, CreateResult& result);
 bool inspect(security::capability::DomainHandle manager, security::capability::Token control,
@@ -44,6 +52,9 @@ bool inspect(security::capability::DomainHandle manager, security::capability::T
 bool terminate(security::capability::DomainHandle manager, security::capability::Token control,
                u32 exit_code);
 bool destroy(security::capability::DomainHandle manager, security::capability::Token control);
+bool acquire_address_space(security::capability::DomainHandle manager,
+                           security::capability::Token control, AddressSpaceLease& lease);
+void release_address_space(AddressSpaceLease& lease);
 bool self_test();
 Statistics statistics();
 u32 failure_code();
