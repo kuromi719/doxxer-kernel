@@ -280,6 +280,19 @@ namespace {
     log::write("\n");
     log::success("ALL CPU SECURITY STATE VERIFIED");
     log::success("SMP IPI SELF-TEST PASSED");
+    u64 syscall_stack_bottom = 0;
+    u64 syscall_stack_top = 0;
+    if (!arch::x86_64::smp::current_syscall_stack(syscall_stack_bottom,
+                                                  syscall_stack_top) ||
+        syscall_stack_top - syscall_stack_bottom != 8 * memory::physical::kPageSize) {
+        panic("PER-CPU SYSCALL STACK VALIDATION FAILED");
+    }
+    log::write("[INFO] GUARDED SYSCALL STACKS: ");
+    log::write_decimal(arch::x86_64::smp::processor_count());
+    log::write(" / BYTES EACH: ");
+    log::write_decimal(syscall_stack_top - syscall_stack_bottom);
+    log::write("\n");
+    log::success("PER-CPU GUARDED SYSCALL STACKS ONLINE");
     if (!scheduler::initialize()) {
         log::write("[ERROR] SCHEDULER FAILURE STAGE: ");
         log::write_decimal(scheduler::failure_code());

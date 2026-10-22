@@ -7,6 +7,8 @@
 #include <doxxer/memory/physical.hpp>
 #include <doxxer/memory/virtual.hpp>
 
+extern "C" doxxer::uptr __stack_chk_guard;
+
 namespace doxxer::arch::x86_64::smp {
 namespace {
 using memory::physical::kPageSize;
@@ -18,11 +20,13 @@ constexpr u64 kCpuArenaBase = 0x0000'7200'0000'0000ULL;
 constexpr u64 kCpuArenaStride = 0x0100'0000ULL;
 constexpr u64 kExceptionStackOffset = 0x0010'0000ULL;
 constexpr u64 kEmergencyStackOffset = 0x0020'0000ULL;
+constexpr u64 kSyscallStackOffset = 0x0030'0000ULL;
 constexpr u64 kStartupTimeoutMicroseconds = 1'000'000;
 constexpr u64 kIpiTimeoutMicroseconds = 250'000;
 constexpr u16 kTaskStateSelector = 0x28;
 constexpr u8 kProbeVector = 0xE1;
 constexpr u32 kGsBaseMsr = 0xC000'0101U;
+constexpr u64 kSyscallStackCanary = 0x4458'5359'5343'414EULL;
 
 enum class CpuStatus : u32 {
     offline = 0,
@@ -72,6 +76,8 @@ struct alignas(64) CpuState {
     StackMapping kernel_stack;
     StackMapping exception_stack;
     StackMapping emergency_stack;
+    StackMapping syscall_stack;
+    u64 syscall_stack_canary;
     alignas(16) u64 gdt[7];
     alignas(16) TaskStateSegment tss;
 };
@@ -131,7 +137,39 @@ bool prepare_cpu_stacks(CpuState& cpu, usize index) {
     const u64 base = kCpuArenaBase + index * kCpuArenaStride;
     return map_stack(cpu.kernel_stack, base) &&
            map_stack(cpu.exception_stack, base + kExceptionStackOffset) &&
-           map_stack(cpu.emergency_stack, base + kEmergencyStackOffset);
+           map_stack(cpu.emergency_stack, base + kEmergencyStackOffset) &&
+           map_stack(cpu.syscall_stack, base + kSyscallStackOffset);
+}
+
+bool prepare_boot_syscall_stack(CpuState& cpu, usize index) {
+    const u64 base = kCpuArenaBase + index * kCpuArenaStride;
+    return map_stack(cpu.syscall_stack, base + kSyscallStackOffset);
+}
+
+u64 syscall_stack_canary(const CpuState& cpu) {
+    return kSyscallStackCanary ^ (static_cast<u64>(cpu.index) << 32U) ^
+           cpu.syscall_stack.physical_base ^ static_cast<u64>(__stack_chk_guard);
+}
+
+void initialize_syscall_stack(CpuState& cpu) {
+    auto* words = reinterpret_cast<volatile u64*>(cpu.syscall_stack.virtual_base + kPageSize);
+    constexpr u64 word_count = (kStackPages * kPageSize) / sizeof(u64);
+    for (u64 index = 0; index < word_count; ++index) {
+        words[index] = 0;
+    }
+    cpu.syscall_stack_canary = syscall_stack_canary(cpu);
+    words[0] = cpu.syscall_stack_canary;
+}
+
+bool syscall_stack_intact(const CpuState& cpu) {
+    if (cpu.syscall_stack.mapped_pages != kStackPages ||
+        cpu.syscall_stack.virtual_base == 0 || cpu.syscall_stack.physical_base == 0 ||
+        cpu.syscall_stack_canary != syscall_stack_canary(cpu)) {
+        return false;
+    }
+    const auto* bottom = reinterpret_cast<const volatile u64*>(
+        cpu.syscall_stack.virtual_base + kPageSize);
+    return *bottom == cpu.syscall_stack_canary;
 }
 
 void install_descriptors(CpuState& cpu) {
@@ -179,7 +217,7 @@ void install_descriptors(CpuState& cpu) {
 void probe_handler(interrupts::ExceptionFrame&) {
     CpuState* cpu = current_cpu();
     if (cpu != nullptr && cpu->self == cpu && cpu->index < discovered_processors &&
-        cpu->apic_id == apic::current_id()) {
+        cpu->apic_id == apic::current_id() && syscall_stack_intact(*cpu)) {
         __atomic_add_fetch(&cpu->ipi_probes, 1U, __ATOMIC_RELAXED);
     }
     apic::eoi();
@@ -269,6 +307,10 @@ bool initialize(const volatile limine_mp_response* response,
             bsp_found = true;
             bsp = &cpus[index];
             cpus[index].status = static_cast<u32>(CpuStatus::online);
+            if (!prepare_boot_syscall_stack(cpus[index], index)) {
+                last_failure = 5;
+                return false;
+            }
         } else {
             cpus[index].status = static_cast<u32>(CpuStatus::launching);
             if (!prepare_cpu_stacks(cpus[index], index)) {
@@ -276,6 +318,7 @@ bool initialize(const volatile limine_mp_response* response,
                 return false;
             }
         }
+        initialize_syscall_stack(cpus[index]);
     }
     if (!bsp_found || !interrupts::register_handler(kProbeVector, probe_handler)) {
         last_failure = 6;
@@ -318,10 +361,38 @@ bool self_test() {
     }
     CpuState* bsp = current_cpu();
     if (bsp == nullptr || bsp->self != bsp || bsp->index >= discovered_processors ||
-        bsp->apic_id != apic::current_id() || !hardening::verify_current_processor() ||
+        bsp->apic_id != apic::current_id() || !syscall_stack_intact(*bsp) ||
+        !hardening::verify_current_processor() ||
         hardening::statistics().hardened_processors != discovered_processors) {
         last_failure = 12;
         return false;
+    }
+    auto* active_space = memory::virtual_memory::active_address_space();
+    if (active_space == nullptr) {
+        last_failure = 13;
+        return false;
+    }
+    memory::virtual_memory::Mapping mapping{};
+    for (u32 index = 0; index < discovered_processors; ++index) {
+        const StackMapping& stack = cpus[index].syscall_stack;
+        if (!syscall_stack_intact(cpus[index]) ||
+            memory::virtual_memory::query(*active_space, stack.virtual_base, mapping) ||
+            memory::virtual_memory::query(*active_space, stack.top(), mapping)) {
+            last_failure = 13;
+            return false;
+        }
+        for (u64 page = 0; page < kStackPages; ++page) {
+            if (!memory::virtual_memory::query(*active_space,
+                                               stack.virtual_base + (page + 1) * kPageSize,
+                                               mapping) ||
+                mapping.physical_address != stack.physical_base + page * kPageSize ||
+                !memory::virtual_memory::has_flag(mapping.flags, MapFlags::write) ||
+                memory::virtual_memory::has_flag(mapping.flags, MapFlags::execute) ||
+                memory::virtual_memory::has_flag(mapping.flags, MapFlags::user)) {
+                last_failure = 13;
+                return false;
+            }
+        }
     }
     u32 before[kMaximumProcessors]{};
     const u32 bsp_id = apic::current_id();
@@ -382,6 +453,19 @@ u32 current_index() {
 
 u32 apic_id(u32 index) {
     return index >= discovered_processors ? 0xFFFF'FFFFU : cpus[index].apic_id;
+}
+
+bool current_syscall_stack(u64& stack_bottom, u64& stack_top) {
+    stack_bottom = 0;
+    stack_top = 0;
+    CpuState* cpu = current_cpu();
+    if (!initialized || cpu == nullptr || cpu->self != cpu ||
+        cpu->index >= discovered_processors || !syscall_stack_intact(*cpu)) {
+        return false;
+    }
+    stack_bottom = cpu->syscall_stack.virtual_base + kPageSize;
+    stack_top = cpu->syscall_stack.top();
+    return true;
 }
 
 bool install_worker_entry(WorkerEntry entry) {

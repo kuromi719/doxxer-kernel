@@ -89,6 +89,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] PER-CPU RUNTIME ONLINE',
         '[OK] ALL CPU SECURITY STATE VERIFIED',
         '[OK] SMP IPI SELF-TEST PASSED',
+        '[OK] PER-CPU GUARDED SYSCALL STACKS ONLINE',
         '[OK] PER-CPU SCHEDULER ONLINE',
         '[OK] CROSS-CPU TASK SELF-TEST PASSED',
         '[OK] APIC TIMER ONLINE',

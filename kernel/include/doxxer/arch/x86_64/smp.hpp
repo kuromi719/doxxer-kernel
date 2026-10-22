@@ -17,6 +17,7 @@ u32 current_processor_id();
 u32 current_apic_id();
 u32 current_index();
 u32 apic_id(u32 index);
+bool current_syscall_stack(u64& stack_bottom, u64& stack_top);
 bool install_worker_entry(WorkerEntry entry);
 u32 failure_code();
 }

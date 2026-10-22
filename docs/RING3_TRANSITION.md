@@ -31,7 +31,8 @@ The probe establishes that the configured page tables, GDT selectors, NX/user pe
 the boot CPU. It exposes only a fixed `abi_info` request from fixed probe code, does not run
 arbitrary applications, and does not constitute a scheduler.
 
-A production entry path still requires per-CPU syscall stacks and state, `SWAPGS` discipline,
-canonical return checks, signal/exception delivery, preemption rules, and an audited `SYSRETQ`
-versus `IRETQ` return policy. The boot-only LSTAR is removed and the original MSR state restored
-immediately.
+Dedicated per-CPU guarded syscall stacks are provisioned during SMP startup and verified on every
+processor. A production entry path still requires binding those stacks to active thread state,
+`SWAPGS` discipline, canonical return checks, signal/exception delivery, preemption rules, and an
+audited `SYSRETQ` versus `IRETQ` return policy. The boot-only LSTAR is removed and the original MSR
+state restored immediately.
