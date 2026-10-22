@@ -15,6 +15,7 @@
 #include <doxxer/process/process.hpp>
 #include <doxxer/scheduler/scheduler.hpp>
 #include <doxxer/security/capability.hpp>
+#include <doxxer/service/registry.hpp>
 #include <doxxer/sync/event.hpp>
 #include <doxxer/syscall/dispatcher.hpp>
 
@@ -114,6 +115,20 @@ namespace {
     log::write_decimal(syscall_stats.rejected);
     log::write(" REJECTED\n");
     log::success("BOUNDED SYSCALL ABI ONLINE");
+
+    if (!service::initialize() || !service::self_test()) {
+        log::write("[ERROR] SERVICE REGISTRY SELF-TEST STAGE: ");
+        log::write_decimal(service::failure_code());
+        log::write("\n");
+        panic("SERVICE REGISTRY SELF-TEST FAILED");
+    }
+    const service::Statistics service_stats = service::statistics();
+    log::write("[INFO] SERVICE REGISTRY: ");
+    log::write_decimal(service_stats.registrations);
+    log::write(" PUBLISHED / ");
+    log::write_decimal(service_stats.resolutions);
+    log::write(" RESOLVED\n");
+    log::success("CAPABILITY SERVICE REGISTRY ONLINE");
 
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");

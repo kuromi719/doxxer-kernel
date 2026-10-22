@@ -11,6 +11,7 @@ enum class ObjectType : u16 {
     task = 4,
     event = 5,
     process = 6,
+    service_registration = 7,
 };
 
 enum class Right : u32 {
