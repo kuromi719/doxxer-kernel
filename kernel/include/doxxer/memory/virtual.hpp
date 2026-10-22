@@ -58,6 +58,7 @@ class AddressSpace final {
 bool create(AddressSpace& space, u16 pcid = 0);
 bool destroy(AddressSpace& space);
 bool activate(AddressSpace& space);
+AddressSpace* active_address_space();
 bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlags flags,
          PageSize page_size = PageSize::size_4k);
 bool unmap(AddressSpace& space, u64 virtual_address);

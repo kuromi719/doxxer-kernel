@@ -40,6 +40,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] GDT TSS IDT ONLINE',
         '[OK] EXCEPTION AND GUARD SELF-TEST PASSED',
         '[OK] GUARDED KERNEL STACK ACTIVE',
+        '[OK] HARDENED HEAP ONLINE',
         '[OK] FRAMEBUFFER ONLINE',
         'DOXXER_BOOT_OK'
     )
@@ -52,4 +53,5 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
 
 Invoke-SmokeTest 'disk' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')")
 Invoke-SmokeTest 'iso' @('-cdrom',(Join-Path $root 'dist\doxxer.iso'))
+Invoke-SmokeTest 'lowmem' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')") '128M'
 Invoke-SmokeTest 'highmem' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')") '5G'

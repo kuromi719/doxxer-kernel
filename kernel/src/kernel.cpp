@@ -3,6 +3,7 @@
 #include <doxxer/boot/requests.hpp>
 #include <doxxer/graphics/framebuffer.hpp>
 #include <doxxer/log.hpp>
+#include <doxxer/memory/heap.hpp>
 #include <doxxer/memory/physical.hpp>
 #include <doxxer/memory/virtual.hpp>
 #include <doxxer/panic.hpp>
@@ -16,6 +17,23 @@ namespace {
         panic("KERNEL STACK TRANSITION FAILED");
     }
     log::success("GUARDED KERNEL STACK ACTIVE");
+
+    if (!memory::heap::initialize()) {
+        panic("KERNEL HEAP INITIALIZATION FAILED");
+    }
+    if (!memory::heap::self_test()) {
+        log::write("[ERROR] HEAP SELF-TEST STAGE: ");
+        log::write_decimal(memory::heap::self_test_failure());
+        log::write("\n");
+        panic("KERNEL HEAP SELF-TEST FAILED");
+    }
+    const memory::heap::Statistics heap_stats = memory::heap::statistics();
+    log::write("[INFO] HEAP COMMITTED PAGES: ");
+    log::write_decimal(heap_stats.committed_pages);
+    log::write(" / QUARANTINED OBJECTS: ");
+    log::write_decimal(heap_stats.quarantined_objects);
+    log::write("\n");
+    log::success("HARDENED HEAP ONLINE");
 
     const volatile limine_framebuffer_response* framebuffer_response =
         boot::framebuffer_request.response;

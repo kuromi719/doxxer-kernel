@@ -17,6 +17,7 @@ constexpr u64 kNoExecute = 1ULL << 63U;
 constexpr u64 kAddressMask = 0x000F'FFFF'FFFF'F000ULL;
 constexpr u64 kPcidMaximum = 4095;
 u32 last_self_test_failure = 0;
+AddressSpace* active_space = nullptr;
 
 struct alignas(4096) PageTable {
     u64 entries[kEntriesPerTable];
@@ -340,8 +341,14 @@ bool activate(AddressSpace& space) {
         return false;
     }
     write_cr3(space.root_physical());
-    return read_cr3_root() == space.root_physical();
+    if (read_cr3_root() != space.root_physical()) {
+        return false;
+    }
+    active_space = &space;
+    return true;
 }
+
+AddressSpace* active_address_space() { return active_space; }
 
 bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlags flags,
          PageSize page_size) {

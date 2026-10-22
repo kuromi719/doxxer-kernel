@@ -32,6 +32,8 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 - A private GDT/TSS/IDT routes exceptions through known assembly frames and dedicated IST stacks; double fault, NMI, and machine check use the emergency IST.
 - Boot probes exercise a breakpoint and a real guard-page fault, including recovery and verification that exception frames landed on the intended IST.
 - Fatal exceptions report vector, error code, CR2, control state, and general registers before halting with interrupts disabled.
+- Dynamic allocations are zeroed on allocation and release, protected by entropy-derived metadata and tail canaries, and delayed through a bounded quarantine.
+- Slab pages and page-backed allocations have unmapped guards; released large objects are immediately unmapped so stale access faults.
 - Serial panic diagnostics followed by an interrupt-disabled halt.
 
 ## Out of scope for milestone 1
@@ -44,4 +46,4 @@ The current prototype trusts the CPU, QEMU/firmware, Limine, the kernel image, a
 
 ## Planned direction
 
-Future milestones should rebuild inherited kernel mappings with section-granular permissions, add APIC interrupt routing, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Each milestone must update this document before expanding the trusted computing base.
+Future milestones should rebuild inherited kernel mappings with section-granular permissions, add APIC interrupt routing, ring-3 processes, capability-oriented resource access, signed updates, and a deliberately narrow network stack. Allocator hardening does not make memory-unsafe kernel code safe; detected corruption still requires a fail-closed caller policy. Each milestone must update this document before expanding the trusted computing base.

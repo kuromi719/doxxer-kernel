@@ -93,7 +93,10 @@ exception stacks. Every 64 KiB stack is non-executable and isolated between an
 unmapped lower and upper guard page. The boot stack is abandoned after the new
 GDT, TSS, IDT, and fault probes are validated.
 
+The virtual layer now also backs a bounded 64 MiB kernel heap arena. Slab and
+large allocations are supervisor-only, writable, and NX; every backing region
+has page guards. See `HEAP.md` for allocator-specific invariants.
+
 The next memory milestone will reconstruct the inherited upper half with
-Doxxer-owned section-granular mappings and layer a small kernel heap on virtual
-mappings. PCID activation and SMP TLB shootdowns remain disabled until CPU
-discovery and inter-processor interrupt support exist.
+Doxxer-owned section-granular mappings. PCID activation and SMP TLB shootdowns
+remain disabled until CPU discovery and inter-processor interrupt support exist.
