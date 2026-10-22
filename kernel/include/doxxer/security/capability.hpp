@@ -69,6 +69,8 @@ bool register_object(ObjectType type, void* object, ObjectHandle& handle);
 bool unregister_object(ObjectHandle handle);
 bool grant(DomainHandle domain, ObjectHandle object, Rights granted_rights, Token& token);
 bool derive(DomainHandle domain, Token parent, Rights reduced_rights, Token& token);
+bool delegate(DomainHandle source_domain, Token source, DomainHandle destination_domain,
+              Rights reduced_rights, Token& token);
 bool revoke(DomainHandle domain, Token token);
 bool acquire(DomainHandle domain, Token token, ObjectType expected_type, Rights required_rights,
              Lease& lease);

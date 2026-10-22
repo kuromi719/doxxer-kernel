@@ -24,9 +24,16 @@ Defined rights are `inspect`, `read`, `write`, `signal`, `wait`, `map`, `derive`
 
 A trusted kernel subsystem may grant a root capability. Derivation requires the parent's `derive` right and can only preserve or remove existing rights. It cannot change the referenced object or type. Derivation ancestry is bounded, preventing malicious cycles or unbounded validation work.
 
+Cross-domain delegation separately requires the `transfer` right. The receiving domain gets only
+the requested subset of the sender's rights, and the delegated entry retains a generation-checked
+ancestry link to its source.
+
 ## Revocation
 
-Each child records its parent's slot and generation. Revoking a capability invalidates that slot and advances its generation. Descendants then fail ancestry validation because the recorded parent generation no longer exists. This provides recursive revocation without scanning every domain entry.
+Each child records its parent's domain, slot, and generation. Revoking a capability invalidates
+that slot and advances its generation. Descendants then fail ancestry validation because the
+recorded parent generation no longer exists. This provides recursive revocation without scanning
+every domain entry, including when ancestry crosses domain boundaries.
 
 Slot reuse cannot revive an old token: generations advance and the keyed tag changes. Recreating a domain also rotates its nonce, invalidating every token from the earlier incarnation.
 
@@ -49,13 +56,14 @@ The self-test exercises:
 - Object destruction blocked by a live lease
 - Object-generation invalidation after destruction
 - Domain-generation invalidation after teardown
+- Cross-domain attenuation and source-revocation propagation
 
 Every negative test must be rejected before the capability model is declared online.
 
 ## Deferred work
 
 - Per-process domain ownership and syscall copying
-- Capability transfer through bounded IPC channels
+- Attaching delegated tokens to IPC message envelopes
 - Object-specific policy adapters
 - Audit identities and structured denial telemetry
 - Scalable registries beyond the fixed prototype limits

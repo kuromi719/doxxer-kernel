@@ -28,6 +28,8 @@ struct CapabilityEntry {
     Rights granted_rights;
     u16 parent_slot;
     u32 parent_generation;
+    u16 parent_domain_slot;
+    u32 parent_domain_generation;
 };
 
 struct DomainEntry {
@@ -100,6 +102,8 @@ u64 authentication_tag(const DomainEntry& domain, u16 slot, const CapabilityEntr
     value ^= static_cast<u64>(capability.type) << 9U;
     value ^= static_cast<u64>(capability.parent_slot) << 47U;
     value ^= capability.parent_generation;
+    value ^= static_cast<u64>(capability.parent_domain_slot) << 37U;
+    value ^= static_cast<u64>(capability.parent_domain_generation) << 3U;
     return mix64(value) & kTagMask;
 }
 
@@ -125,16 +129,22 @@ bool decode_token(const DomainEntry& domain, Token token, u16& slot, CapabilityE
     return true;
 }
 
-bool ancestry_valid(const DomainEntry& domain, const CapabilityEntry& capability) {
+bool ancestry_valid(const CapabilityEntry& capability) {
     const CapabilityEntry* child = &capability;
     for (u32 depth = 0; depth <= kMaximumDerivationDepth; ++depth) {
         if (child->parent_slot == kInvalidSlot) {
-            return true;
+            return child->parent_domain_slot == kInvalidSlot;
         }
-        if (child->parent_slot >= kCapabilitiesPerDomain) {
+        if (child->parent_slot >= kCapabilitiesPerDomain ||
+            child->parent_domain_slot >= kMaximumDomains) {
             return false;
         }
-        const CapabilityEntry& parent = domain.capabilities[child->parent_slot];
+        const DomainEntry& parent_domain = domains[child->parent_domain_slot];
+        if (!parent_domain.active ||
+            parent_domain.generation != child->parent_domain_generation) {
+            return false;
+        }
+        const CapabilityEntry& parent = parent_domain.capabilities[child->parent_slot];
         if (!parent.active || parent.generation != child->parent_generation ||
             parent.object_slot != child->object_slot ||
             parent.object_generation != child->object_generation ||
@@ -169,6 +179,8 @@ void invalidate_capability(CapabilityEntry& capability) {
     capability.granted_rights = 0;
     capability.parent_slot = kInvalidSlot;
     capability.parent_generation = 0;
+    capability.parent_domain_slot = kInvalidSlot;
+    capability.parent_domain_generation = 0;
 }
 
 void reject() { ++rejected; }
@@ -189,6 +201,7 @@ bool initialize() {
             capability.generation = 1;
             capability.object_slot = kInvalidSlot;
             capability.parent_slot = kInvalidSlot;
+            capability.parent_domain_slot = kInvalidSlot;
         }
     }
     for (auto& object : objects) {
@@ -294,6 +307,8 @@ bool grant(DomainHandle domain_handle, ObjectHandle object_handle, Rights grante
     capability->granted_rights = granted_rights;
     capability->parent_slot = kInvalidSlot;
     capability->parent_generation = 0;
+    capability->parent_domain_slot = kInvalidSlot;
+    capability->parent_domain_generation = 0;
     capability->active = true;
     token = encode_token(*domain, slot, *capability);
     return true;
@@ -306,7 +321,7 @@ bool derive(DomainHandle domain_handle, Token parent_token, Rights reduced_right
     CapabilityEntry* parent = nullptr;
     if (domain == nullptr || !rights_valid(reduced_rights) ||
         !decode_token(*domain, parent_token, parent_slot, parent) ||
-        !ancestry_valid(*domain, *parent) ||
+        !ancestry_valid(*parent) ||
         (parent->granted_rights & rights(Right::derive)) == 0 ||
         (reduced_rights & ~parent->granted_rights) != 0) {
         reject();
@@ -324,8 +339,45 @@ bool derive(DomainHandle domain_handle, Token parent_token, Rights reduced_right
     child->granted_rights = reduced_rights;
     child->parent_slot = parent_slot;
     child->parent_generation = parent->generation;
+    child->parent_domain_slot = domain_handle.slot;
+    child->parent_domain_generation = domain_handle.generation;
     child->active = true;
     token = encode_token(*domain, slot, *child);
+    return true;
+}
+
+bool delegate(DomainHandle source_domain_handle, Token source_token,
+              DomainHandle destination_domain_handle, Rights reduced_rights, Token& token) {
+    sync::LockGuard guard(registry_lock);
+    DomainEntry* source_domain = valid_domain(source_domain_handle);
+    DomainEntry* destination_domain = valid_domain(destination_domain_handle);
+    u16 source_slot = 0;
+    CapabilityEntry* source = nullptr;
+    if (source_domain == nullptr || destination_domain == nullptr ||
+        !rights_valid(reduced_rights) ||
+        !decode_token(*source_domain, source_token, source_slot, source) ||
+        !ancestry_valid(*source) ||
+        (source->granted_rights & rights(Right::transfer)) == 0 ||
+        (reduced_rights & ~source->granted_rights) != 0) {
+        reject();
+        return false;
+    }
+    u16 destination_slot = 0;
+    CapabilityEntry* delegated = allocate_capability(*destination_domain, destination_slot);
+    if (delegated == nullptr) {
+        reject();
+        return false;
+    }
+    delegated->object_slot = source->object_slot;
+    delegated->object_generation = source->object_generation;
+    delegated->type = source->type;
+    delegated->granted_rights = reduced_rights;
+    delegated->parent_slot = source_slot;
+    delegated->parent_generation = source->generation;
+    delegated->parent_domain_slot = source_domain_handle.slot;
+    delegated->parent_domain_generation = source_domain_handle.generation;
+    delegated->active = true;
+    token = encode_token(*destination_domain, destination_slot, *delegated);
     return true;
 }
 
@@ -335,7 +387,7 @@ bool revoke(DomainHandle domain_handle, Token token) {
     u16 slot = 0;
     CapabilityEntry* capability = nullptr;
     if (domain == nullptr || !decode_token(*domain, token, slot, capability) ||
-        !ancestry_valid(*domain, *capability)) {
+        !ancestry_valid(*capability)) {
         reject();
         return false;
     }
@@ -351,7 +403,7 @@ bool acquire(DomainHandle domain_handle, Token token, ObjectType expected_type,
     u16 slot = 0;
     CapabilityEntry* capability = nullptr;
     if (domain == nullptr || !type_valid(expected_type) || !rights_valid(required_rights) ||
-        !decode_token(*domain, token, slot, capability) || !ancestry_valid(*domain, *capability) ||
+        !decode_token(*domain, token, slot, capability) || !ancestry_valid(*capability) ||
         capability->type != expected_type || (required_rights & ~capability->granted_rights) != 0 ||
         capability->object_slot >= kMaximumObjects) {
         reject();
@@ -396,15 +448,19 @@ void release(Lease& lease) {
 bool self_test() {
     last_failure = 0;
     DomainHandle domain{};
+    DomainHandle receiver_domain{};
     ObjectHandle object{};
     ObjectHandle replacement_object{};
     Token root{};
     Token child{};
     Token replacement{};
+    Token delegated{};
     Lease lease{};
     u64 probe = 0xD0'58'CA'9A'B1'1E'00'01ULL;
-    const Rights root_rights = Right::inspect | Right::read | Right::write | Right::derive;
-    if (!create_domain(domain) || !register_object(ObjectType::kernel_service, &probe, object) ||
+    const Rights root_rights = Right::inspect | Right::read | Right::write | Right::derive |
+                               Right::transfer;
+    if (!create_domain(domain) || !create_domain(receiver_domain) ||
+        !register_object(ObjectType::kernel_service, &probe, object) ||
         !grant(domain, object, root_rights, root)) {
         last_failure = 1;
         return false;
@@ -427,23 +483,33 @@ bool self_test() {
         return false;
     }
     release(lease);
-    if (!revoke(domain, root) ||
+    if (!delegate(domain, root, receiver_domain, rights(Right::read), delegated) ||
+        !acquire(receiver_domain, delegated, ObjectType::kernel_service, rights(Right::read),
+                 lease)) {
+        last_failure = 5;
+        return false;
+    }
+    release(lease);
+    if (delegate(receiver_domain, delegated, domain, rights(Right::read), replacement) ||
+        !revoke(domain, root) ||
         acquire(domain, child, ObjectType::kernel_service, rights(Right::read), lease) ||
+        acquire(receiver_domain, delegated, ObjectType::kernel_service, rights(Right::read),
+                lease) ||
         acquire(domain, root, ObjectType::kernel_service, rights(Right::read), lease) ||
         !grant(domain, object, rights(Right::read), replacement) ||
         replacement.value == root.value ||
         !acquire(domain, replacement, ObjectType::kernel_service, rights(Right::read), lease)) {
-        last_failure = 5;
+        last_failure = 6;
         return false;
     }
     release(lease);
     if (!unregister_object(object) ||
         acquire(domain, replacement, ObjectType::kernel_service, rights(Right::read), lease) ||
         !register_object(ObjectType::kernel_service, &probe, replacement_object) ||
-        !destroy_domain(domain) ||
+        !destroy_domain(receiver_domain) || !destroy_domain(domain) ||
         grant(domain, replacement_object, rights(Right::read), replacement) ||
         !unregister_object(replacement_object)) {
-        last_failure = 6;
+        last_failure = 7;
         return false;
     }
     return true;
