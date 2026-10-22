@@ -5,6 +5,7 @@
 #include <doxxer/boot/requests.hpp>
 #include <doxxer/firmware/acpi.hpp>
 #include <doxxer/graphics/framebuffer.hpp>
+#include <doxxer/ipc/channel.hpp>
 #include <doxxer/log.hpp>
 #include <doxxer/memory/heap.hpp>
 #include <doxxer/memory/physical.hpp>
@@ -54,6 +55,20 @@ namespace {
     log::write_decimal(capability_stats.rejected_operations);
     log::write("\n");
     log::success("CAPABILITY SECURITY MODEL ONLINE");
+
+    if (!ipc::initialize() || !ipc::self_test()) {
+        log::write("[ERROR] IPC SELF-TEST STAGE: ");
+        log::write_decimal(ipc::failure_code());
+        log::write("\n");
+        panic("CAPABILITY IPC SELF-TEST FAILED");
+    }
+    const ipc::Statistics ipc_stats = ipc::statistics();
+    log::write("[INFO] IPC MESSAGES: ");
+    log::write_decimal(ipc_stats.sent_messages);
+    log::write(" SENT / ");
+    log::write_decimal(ipc_stats.received_messages);
+    log::write(" RECEIVED\n");
+    log::success("CAPABILITY IPC ONLINE");
 
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");

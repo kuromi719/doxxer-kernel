@@ -56,6 +56,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] GUARDED KERNEL STACK ACTIVE',
         '[OK] HARDENED HEAP ONLINE',
         '[OK] CAPABILITY SECURITY MODEL ONLINE',
+        '[OK] CAPABILITY IPC ONLINE',
         '[OK] ACPI TABLES VALIDATED',
         '[OK] LOCAL APIC ONLINE',
         '[OK] IOAPIC MASKED',
