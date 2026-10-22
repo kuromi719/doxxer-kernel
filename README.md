@@ -44,6 +44,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Fail-closed Intel VT-d activation with an empty root table that denies all PCI DMA by default
 - Boot-keyed shadow page ledger with typed ownership, zero-on-transition, and user-map enforcement
 - Non-reusable address-space memory domains blocking cross-process RAM mapping and direct access
+- Sealed user-page mapping references preventing free/reuse while any page-table alias remains
 - Mandatory per-CPU WP, NX, SMEP, SMAP, UMIP, timestamp restriction, and advertised speculation controls
 - Runtime verification of RX/R/RW kernel image mappings on the active page tables
 - W^X-compatible ELF segments and non-executable stack

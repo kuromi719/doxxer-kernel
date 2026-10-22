@@ -243,6 +243,49 @@ bool destroy_table(PageTable* table, u8 level) {
     return success;
 }
 
+bool table_contains_user_mapping(PageTable* table, u8 level) {
+    if (table == nullptr || level == 0) {
+        return true;
+    }
+    for (u64 index = 0; index < kEntriesPerTable; ++index) {
+        const u64 entry = table->entries[index];
+        if ((entry & kPresent) == 0) {
+            continue;
+        }
+        if (level == 1 || (entry & kHuge) != 0) {
+            if ((entry & kUser) != 0) {
+                return true;
+            }
+            continue;
+        }
+        if (table_contains_user_mapping(table_from_physical(entry),
+                                        static_cast<u8>(level - 1))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool user_half_empty(PageTable* root, bool owns_supervisor_windows) {
+    if (root == nullptr) {
+        return false;
+    }
+    for (u64 index = 0; index < kEntriesPerTable / 2; ++index) {
+        if (!owns_supervisor_windows && supervisor_window_index(index)) {
+            continue;
+        }
+        const u64 entry = root->entries[index];
+        if ((entry & kPresent) == 0) {
+            continue;
+        }
+        if ((entry & kHuge) != 0 ||
+            table_contains_user_mapping(table_from_physical(entry), 3)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool destroy_user_half(PageTable* root, bool owns_supervisor_windows) {
     if (root == nullptr) {
         return false;
@@ -384,7 +427,7 @@ bool destroy(AddressSpace& space) {
     sync::LockGuard supervisor_guard(supervisor_windows_lock);
     sync::LockGuard guard(space.lock_);
     PageTable* root = table_from_physical(space.root_physical());
-    if (root == nullptr) {
+    if (root == nullptr || !user_half_empty(root, space.owns_supervisor_windows_)) {
         return false;
     }
     const u64 root_physical = space.root_physical();
@@ -422,12 +465,21 @@ bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlag
         (physical_address & ~kAddressMask) != 0) {
         return false;
     }
-    if (has_flag(flags, MapFlags::user) &&
-        !physical::user_mapping_allowed(physical_address, size / kPageSize,
-                                        has_flag(flags, MapFlags::execute),
-                                        space.isolation_domain())) {
+    const bool user = has_flag(flags, MapFlags::user);
+    const u64 mapped_pages = size / kPageSize;
+    if ((user && !physical::retain_user_mapping(physical_address, mapped_pages,
+                                                 has_flag(flags, MapFlags::execute),
+                                                 space.isolation_domain())) ||
+        (!user && !physical::supervisor_mapping_allowed(physical_address, mapped_pages))) {
         return false;
     }
+    const auto fail = [&]() {
+        if (user) {
+            (void)physical::release_user_mapping(physical_address, mapped_pages,
+                                                 space.isolation_domain());
+        }
+        return false;
+    };
 
     ConditionalLockGuard supervisor_guard(supervisor_window_index(pml4_index(virtual_address))
                                                ? &supervisor_windows_lock
@@ -435,25 +487,24 @@ bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlag
     sync::LockGuard guard(space.lock_);
     PageTable* pml4 = table_from_physical(space.root_physical());
     if (pml4 == nullptr) {
-        return false;
+        return fail();
     }
-    const bool user = has_flag(flags, MapFlags::user);
     PageTable* pdpt = nullptr;
     u64& pml4e = pml4->entries[pml4_index(virtual_address)];
     if (!next_table(pml4e, user, true, pdpt)) {
         prune_empty_path(space, virtual_address);
-        return false;
+        return fail();
     }
     PageTable* pd = nullptr;
     u64& pdpte = pdpt->entries[pdpt_index(virtual_address)];
     if (!next_table(pdpte, user, true, pd)) {
         prune_empty_path(space, virtual_address);
-        return false;
+        return fail();
     }
     u64& pde = pd->entries[pd_index(virtual_address)];
     if (page_size == PageSize::size_2m) {
         if ((pde & kPresent) != 0) {
-            return false;
+            return fail();
         }
         pde = physical_address | leaf_flags(flags, true);
         invalidate_if_active(space, virtual_address);
@@ -463,11 +514,11 @@ bool map(AddressSpace& space, u64 virtual_address, u64 physical_address, MapFlag
     PageTable* pt = nullptr;
     if (!next_table(pde, user, true, pt)) {
         prune_empty_path(space, virtual_address);
-        return false;
+        return fail();
     }
     u64& pte = pt->entries[pt_index(virtual_address)];
     if ((pte & kPresent) != 0) {
-        return false;
+        return fail();
     }
     pte = physical_address | leaf_flags(flags, false);
     invalidate_if_active(space, virtual_address);
@@ -505,6 +556,12 @@ bool unmap(AddressSpace& space, u64 virtual_address) {
         if (virtual_address % static_cast<u64>(PageSize::size_2m) != 0) {
             return false;
         }
+        if ((pde & kUser) != 0 &&
+            !physical::release_user_mapping(
+                pde & kAddressMask, static_cast<u64>(PageSize::size_2m) / kPageSize,
+                space.isolation_domain())) {
+            return false;
+        }
         pde = 0;
     } else {
         PageTable* pt = table_from_physical(pde);
@@ -513,6 +570,11 @@ bool unmap(AddressSpace& space, u64 virtual_address) {
         }
         u64& pte = pt->entries[pt_index(virtual_address)];
         if ((pte & kPresent) == 0) {
+            return false;
+        }
+        if ((pte & kUser) != 0 &&
+            !physical::release_user_mapping(pte & kAddressMask, 1,
+                                             space.isolation_domain())) {
             return false;
         }
         pte = 0;
@@ -560,6 +622,9 @@ bool protect(AddressSpace& space, u64 virtual_address, MapFlags flags) {
                         has_flag(flags, MapFlags::execute), space.isolation_domain())) {
             return false;
         }
+        if (((pde & kUser) != 0) != user) {
+            return false;
+        }
         pde = (pde & kAddressMask) | leaf_flags(flags, true);
     } else {
         PageTable* pt = table_from_physical(pde);
@@ -573,6 +638,9 @@ bool protect(AddressSpace& space, u64 virtual_address, MapFlags flags) {
         if (user && !physical::user_mapping_allowed(pte & kAddressMask, 1,
                                                      has_flag(flags, MapFlags::execute),
                                                      space.isolation_domain())) {
+            return false;
+        }
+        if (((pte & kUser) != 0) != user) {
             return false;
         }
         pte = (pte & kAddressMask) | leaf_flags(flags, false);
@@ -666,6 +734,7 @@ bool self_test() {
     constexpr u64 foreign_virtual = 0x0000'0060'0000'0000ULL;
     if (is_canonical(0x0000'8000'0000'0000ULL) || is_canonical(0xFFFF'0000'0000'0000ULL) ||
         map(foreign_space, foreign_virtual, page, MapFlags::user) ||
+        map(foreign_space, foreign_virtual, page, MapFlags::none) ||
         physical::direct_map_owned(page, physical::PageOwner::user_image,
                                    foreign_space.isolation_domain()) != nullptr ||
         physical::free_page(page, physical::PageOwner::user_image,
@@ -678,7 +747,9 @@ bool self_test() {
         map(space, small_virtual, page, MapFlags::user) ||
         map(space, guard_virtual, page, MapFlags::write | MapFlags::execute, PageSize::size_4k) ||
         !map(space, large_virtual, large_run, MapFlags::user | MapFlags::execute,
-             PageSize::size_2m)) {
+             PageSize::size_2m) ||
+        physical::free_page(page, physical::PageOwner::user_image, space_domain) ||
+        destroy(space)) {
         last_self_test_failure = 2;
         cleanup();
         return false;
@@ -717,7 +788,8 @@ bool self_test() {
         return false;
     }
 
-    if (!protect(space, small_virtual, MapFlags::user | MapFlags::execute) ||
+    if (protect(space, small_virtual, MapFlags::none) ||
+        !protect(space, small_virtual, MapFlags::user | MapFlags::execute) ||
         protect(space, small_virtual, MapFlags::write | MapFlags::execute) ||
         !query(space, small_virtual, small_mapping) ||
         has_flag(small_mapping.flags, MapFlags::write) ||
@@ -750,7 +822,9 @@ bool self_test() {
     kernel_page_allocated = false;
     stack_page_allocated = false;
     const physical::Statistics after = physical::statistics();
-    if (before.free_pages != after.free_pages || before.allocated_pages != after.allocated_pages) {
+    if (before.free_pages != after.free_pages || before.allocated_pages != after.allocated_pages ||
+        before.user_mapping_references != after.user_mapping_references ||
+        after.mapping_rejections != before.mapping_rejections + 2) {
         last_self_test_failure = 8;
         return false;
     }

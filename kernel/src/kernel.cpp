@@ -375,6 +375,8 @@ extern "C" [[noreturn]] void kernel_main() {
     log::write_decimal(memory_stats.ownership_rejections);
     log::write(" / DOMAIN REJECTIONS: ");
     log::write_decimal(memory_stats.domain_rejections);
+    log::write(" / MAPPING REJECTIONS: ");
+    log::write_decimal(memory_stats.mapping_rejections);
     log::write("\n");
     log::success("PMM ONLINE");
     log::success("SEALED SHADOW PAGE LEDGER ONLINE");
@@ -392,6 +394,12 @@ extern "C" [[noreturn]] void kernel_main() {
     log::write_decimal(isolated_memory_stats.domain_rejections);
     log::write("\n");
     log::success("CROSS-DOMAIN RAM ISOLATION VERIFIED");
+    log::write("[INFO] USER PAGE PINS: ");
+    log::write_decimal(isolated_memory_stats.user_mapping_references);
+    log::write(" ACTIVE / ");
+    log::write_decimal(isolated_memory_stats.mapping_rejections);
+    log::write(" REJECTIONS\n");
+    log::success("MAPPED USER PAGE LIFETIMES PINNED");
 
     if (!arch::x86_64::protection::initialize()) {
         panic("CPU PROTECTION INITIALIZATION FAILED");
