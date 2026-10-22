@@ -35,6 +35,7 @@ static_assert(sizeof(DescriptorTablePointer) == 10);
 
 alignas(16) IdtEntry idt[256]{};
 Handler handlers[256]{};
+UserExceptionHandler user_exception_handler = nullptr;
 volatile bool breakpoint_probe_active = false;
 volatile bool breakpoint_seen = false;
 volatile bool page_fault_probe_active = false;
@@ -260,6 +261,14 @@ bool register_handler(u8 vector, Handler handler) {
     return true;
 }
 
+bool register_user_exception_handler(UserExceptionHandler handler) {
+    if (handler == nullptr || user_exception_handler != nullptr || enabled()) {
+        return false;
+    }
+    user_exception_handler = handler;
+    return true;
+}
+
 void enable() { asm volatile("sti" : : : "memory"); }
 
 void disable() { asm volatile("cli" : : : "memory"); }
@@ -291,6 +300,10 @@ void dispatch(ExceptionFrame* frame) {
         doxxer_fault_resume_rip != 0) {
         page_fault_seen = true;
         frame->rip = doxxer_fault_resume_rip;
+        return;
+    }
+    if (frame->vector < 32 && (frame->cs & 3U) == 3U && user_exception_handler != nullptr &&
+        user_exception_handler(*frame, frame->vector == 14 ? read_cr2() : 0)) {
         return;
     }
     if (frame->vector >= 32 && frame->vector < 256 && handlers[frame->vector] != nullptr) {

@@ -21,6 +21,7 @@ u32 apic_id(u32 index);
 bool current_syscall_stack(u64& stack_bottom, u64& stack_top);
 bool bind_syscall_context(void* context);
 bool unbind_syscall_context(void* context);
+void* current_syscall_context();
 bool run_on_all(RendezvousEntry entry);
 bool install_worker_entry(WorkerEntry entry);
 u32 failure_code();

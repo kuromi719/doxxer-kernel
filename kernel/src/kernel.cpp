@@ -327,6 +327,7 @@ namespace {
     }
     log::success("SWAPGS SYSCALL ENTRY ONLINE");
     log::success("VALIDATED IRETQ USER RETURN VERIFIED");
+    log::success("USER EXCEPTION DELIVERY VERIFIED");
     if (!scheduler::initialize()) {
         log::write("[ERROR] SCHEDULER FAILURE STAGE: ");
         log::write_decimal(scheduler::failure_code());

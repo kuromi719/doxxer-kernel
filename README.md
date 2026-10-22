@@ -30,6 +30,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Dedicated per-CPU 32 KiB NX syscall stacks with dual guard pages and integrity canaries
 - SWAPGS syscall entry with process-bound dispatch and validated fixed-selector IRETQ return
 - Deadline-bounded SMP rendezvous installation and verification of syscall MSRs on every CPU
+- SWAPGS-safe user-origin interrupt entry and validated CPL3 exception delivery probe
 - Bounded per-CPU kernel task queues with isolated guarded stacks and generation-safe handles
 - IPI wakeups, idle `hlt`, explicit task lifecycle, stack wiping, and cross-CPU execution tests
 - Capability-first kernel authority model with attenuation, revocation ancestry, typed objects, and pinned leases

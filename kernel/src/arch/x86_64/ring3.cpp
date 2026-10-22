@@ -1,5 +1,6 @@
 #include <doxxer/arch/x86_64/ring3.hpp>
 
+#include <doxxer/arch/x86_64/interrupts.hpp>
 #include <doxxer/arch/x86_64/smp.hpp>
 #include <doxxer/memory/physical.hpp>
 #include <doxxer/memory/user_copy.hpp>
@@ -57,7 +58,8 @@ constexpr u64 kRuntimeFinishRequest = 0x4458'525F'4649'4E49ULL;
 constexpr u64 kRuntimeProbeComplete = 0x4458'5250'524F'4245ULL;
 constexpr u64 kRuntimeProbeFatal = 0x4458'5246'4154'414CULL;
 constexpr usize kRuntimeFirstReturnOffset = 22;
-constexpr usize kRuntimeSecondReturnOffset = 42;
+constexpr usize kRuntimeUserFaultOffset = 27;
+constexpr usize kRuntimeSecondReturnOffset = 44;
 constexpr usize kSyscallOffset = 44;
 constexpr usize kAfterSyscallOffset = kSyscallOffset + 2;
 u32 last_failure = 0;
@@ -66,6 +68,9 @@ u64 runtime_probe_calls = 0;
 u64 runtime_first_rip = 0;
 u64 runtime_first_rsp = 0;
 u64 runtime_first_rflags = 0;
+u64 runtime_user_exceptions = 0;
+u64 runtime_user_fault_rip = 0;
+u64 runtime_user_fault_rsp = 0;
 u32 runtime_cpu_installs = 0;
 bool runtime_initialized = false;
 
@@ -147,6 +152,22 @@ bool install_runtime_cpu() {
         __atomic_add_fetch(&runtime_cpu_installs, 1U, __ATOMIC_RELAXED);
     }
     return valid;
+}
+
+bool handle_runtime_user_exception(interrupts::ExceptionFrame& frame, u64 fault_address) {
+    auto* context = static_cast<process::AddressSpaceLease*>(
+        arch::x86_64::smp::current_syscall_context());
+    if (doxxer_runtime_probe_active != 1 || context == nullptr || frame.vector != 6 ||
+        frame.error_code != 0 || frame.cs != 0x23 || frame.ss != 0x1B || fault_address != 0 ||
+        frame.rip != kUserCode + kRuntimeUserFaultOffset || runtime_user_exceptions != 0 ||
+        !valid_runtime_return(*context, frame.rip, frame.rsp, frame.rflags)) {
+        return false;
+    }
+    runtime_user_exceptions = 1;
+    runtime_user_fault_rip = frame.rip;
+    runtime_user_fault_rsp = frame.rsp;
+    frame.rip += 2;
+    return true;
 }
 
 u64 read_cr3() {
@@ -415,7 +436,8 @@ bool initialize_runtime() {
         return false;
     }
     runtime_cpu_installs = 0;
-    if (!arch::x86_64::smp::run_on_all(install_runtime_cpu) ||
+    if (!interrupts::register_user_exception_handler(handle_runtime_user_exception) ||
+        !arch::x86_64::smp::run_on_all(install_runtime_cpu) ||
         runtime_cpu_installs != arch::x86_64::smp::processor_count()) {
         last_failure = 100;
         return false;
@@ -430,6 +452,9 @@ bool runtime_self_test() {
     runtime_first_rip = 0;
     runtime_first_rsp = 0;
     runtime_first_rflags = 0;
+    runtime_user_exceptions = 0;
+    runtime_user_fault_rip = 0;
+    runtime_user_fault_rsp = 0;
     doxxer_runtime_probe_active = 0;
     doxxer_runtime_probe_kernel_rsp = 0;
     doxxer_runtime_probe_kernel_cr3 = 0;
@@ -505,7 +530,7 @@ bool runtime_self_test() {
         const u8 program[] = {
             0x48, 0xBF, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x48, 0xBE, 0x00, 0x00, 0x91, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x0F, 0x05, 0x48, 0x85, 0xC0, 0x75, 0x0F,
+            0x0F, 0x05, 0x48, 0x85, 0xC0, 0x75, 0x11, 0x0F, 0x0B,
             0x48, 0xBF, 0x49, 0x4E, 0x49, 0x46, 0x5F, 0x52, 0x58, 0x44,
             0x48, 0x31, 0xF6, 0x0F, 0x05, 0x0F, 0x0B,
         };
@@ -581,6 +606,9 @@ bool runtime_self_test() {
 
     if (read_cr3() != expected_kernel_cr3 || read_msr(kMsrKernelGsBase) != 0 ||
         runtime_probe_calls != 2 || runtime_first_rip != kUserCode + kRuntimeFirstReturnOffset ||
+        runtime_user_exceptions != 1 ||
+        runtime_user_fault_rip != kUserCode + kRuntimeUserFaultOffset ||
+        runtime_user_fault_rsp != runtime_first_rsp ||
         runtime_first_rsp < kUserStackBase ||
         runtime_first_rsp >= kUserStackBase + memory::physical::kPageSize ||
         (runtime_first_rflags & kMaskedUserFlags) != 0 ||

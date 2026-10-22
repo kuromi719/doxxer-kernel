@@ -38,10 +38,17 @@ CPU-local state, enters user mode with an empty user GS base, executes the produ
 dispatches through the process copy gateway, and returns through a fixed-selector `IRETQ` frame.
 User code then performs a second syscall, proving that the return path really resumed CPL3.
 
+Between the two syscalls the probe executes `UD2`. The common interrupt entry detects the saved
+CPL3 selector and performs `SWAPGS` before C++ dispatch touches CPU-local state. The registered
+policy validates the bound process lease, selector pair, instruction and stack mappings, RFLAGS,
+and exact fault RIP before skipping the fixed two-byte probe instruction. A matching `SWAPGS`
+before `IRETQ` restores the empty user GS base, and the second syscall proves user execution
+resumed after exception delivery.
+
 The entry path deliberately uses `IRETQ` rather than the more fragile `SYSRETQ` fast path. Invalid
 canonical state, forbidden privilege flags, a missing CPU-local process binding, or an invalid
 executable/stack mapping fail closed before return. The boot probe restores all modified MSRs and
 requires exact page/reference accounting. A serialized rendezvous installs and reads back the
 production `EFER.SCE`, `STAR`, `LSTAR`, and `FMASK` state on every online processor before this
 probe runs. Remaining runtime work includes scheduler-owned binding for arbitrary user threads,
-user-origin interrupt/exception delivery, and preemption rules.
+general process fault termination/notification, and preemption rules.

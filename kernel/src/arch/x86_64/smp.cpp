@@ -534,6 +534,15 @@ bool unbind_syscall_context(void* context) {
     return syscall_stack_intact(*cpu);
 }
 
+void* current_syscall_context() {
+    CpuState* cpu = current_cpu();
+    if (!initialized || cpu == nullptr || cpu->self != cpu ||
+        cpu->index >= discovered_processors || !syscall_stack_intact(*cpu)) {
+        return nullptr;
+    }
+    return __atomic_load_n(&cpu->syscall_context, __ATOMIC_ACQUIRE);
+}
+
 bool run_on_all(RendezvousEntry entry) {
     if (!initialized || entry == nullptr || discovered_processors == 0) {
         return false;

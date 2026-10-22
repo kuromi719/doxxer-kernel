@@ -38,10 +38,18 @@ doxxer_isr_common:
     pushq %r13
     pushq %r14
     pushq %r15
+    testb $3, 144(%rsp)
+    jz .Ldispatch_kernel_origin
+    swapgs
+.Ldispatch_kernel_origin:
     clac
     cld
     movq %rsp, %rdi
     call doxxer_exception_dispatch
+    testb $3, 144(%rsp)
+    jz .Lreturn_kernel_origin
+    swapgs
+.Lreturn_kernel_origin:
     popq %r15
     popq %r14
     popq %r13

@@ -39,5 +39,6 @@ restoration, the same process-bound copy gateway, response contents, and MSR res
 startup, a deadline-bounded rendezvous installs and reads back the runtime syscall MSRs on every
 online CPU. A second two-call probe exercises `SWAPGS`, a CPU-local guarded syscall stack, process
 binding, canonical/mapping/flag return validation, and an actual fixed-selector `IRETQ` return to
-user code. Scheduler-owned binding and user-origin interrupt delivery remain required before
-allowing persistent arbitrary ring-3 callers.
+user code. The probe also resumes from a validated user-origin invalid-opcode exception through a
+`SWAPGS`-safe interrupt entry before making its second syscall. Scheduler-owned binding and general
+process fault termination remain required before allowing persistent arbitrary ring-3 callers.

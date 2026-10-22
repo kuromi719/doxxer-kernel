@@ -95,6 +95,7 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] ALL-CPU SYSCALL MSRS VERIFIED',
         '[OK] SWAPGS SYSCALL ENTRY ONLINE',
         '[OK] VALIDATED IRETQ USER RETURN VERIFIED',
+        '[OK] USER EXCEPTION DELIVERY VERIFIED',
         '[OK] PER-CPU SCHEDULER ONLINE',
         '[OK] CROSS-CPU TASK SELF-TEST PASSED',
         '[OK] APIC TIMER ONLINE',

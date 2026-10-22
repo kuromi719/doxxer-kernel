@@ -29,6 +29,7 @@ struct ExceptionFrame {
 };
 
 using Handler = void (*)(ExceptionFrame& frame);
+using UserExceptionHandler = bool (*)(ExceptionFrame& frame, u64 fault_address);
 
 void initialize();
 void load();
@@ -38,6 +39,7 @@ bool probe_page_fault(u64 fault_address, bool present, u64 exception_stack_botto
 bool probe_execution_fault(u64 fault_address, u64 exception_stack_bottom,
                            u64 exception_stack_top);
 bool register_handler(u8 vector, Handler handler);
+bool register_user_exception_handler(UserExceptionHandler handler);
 void enable();
 void disable();
 bool enabled();

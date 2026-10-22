@@ -23,15 +23,29 @@ I/O APIC inputs remain masked in this milestone. Device-specific routing will be
 
 ## Dispatch contract
 
-CPU exceptions remain fatal unless they are part of an explicit boot self-test. Vectors 32–255 may return only when a kernel handler was registered while interrupts were disabled. Unregistered external vectors use the same register-rich fatal path as unexpected exceptions.
+Kernel-origin exceptions remain fatal unless they are part of an explicit boot self-test. A frame
+whose saved CS has CPL3 is identified in assembly before any CPU-local state is accessed. The entry
+executes `SWAPGS`, clears AC, dispatches on the private IST stack, and executes the matching
+`SWAPGS` immediately before `IRETQ`. A single registered user-exception policy may validate and
+resume a user frame; an unhandled or malformed user exception still follows the fail-closed fatal
+path. Vectors 32–255 may return only when a kernel handler was registered while interrupts were
+disabled. Unregistered external vectors use the same register-rich fatal path as unexpected
+exceptions.
 
 All vectors currently use an IST-backed interrupt frame. NMI, double fault, and machine check retain the separate emergency IST. Every online processor has private TSS/IST stacks while sharing the immutable IDT. The timer handler performs only a tick increment and Local APIC EOI; it does not allocate, log, or take heap locks.
+
+The ring-3 boot program deliberately executes `UD2` after its first successful syscall. The user
+exception policy requires vector 6, fixed user selectors, zero error code, the bound live process
+lease, an executable RIP mapping, a readable user stack, safe RFLAGS, and the exact expected probe
+instruction. It advances only that two-byte instruction and requires user code to complete a
+second syscall. This proves user-origin exception entry, GS restoration, and `IRETQ` resumption.
 
 ## Deferred work
 
 - Per-device I/O APIC routing and interrupt ownership
 - MSI/MSI-X allocation and interrupt remapping
 - Per-CPU timer state and deadline timers
+- Process-level exception termination and user-space exception ports
 - TSC-deadline mode and invariant-TSC timekeeping
 - Power-management ACPI AML execution
 - Physical-hardware quirk handling
