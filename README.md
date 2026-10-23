@@ -105,6 +105,24 @@ make test
 
 Artifacts are written to `build/doxxer-kernel.elf`, `dist/doxxer-uefi.img`, and `dist/doxxer.iso`.
 
+`run.ps1` starts a native, visible QEMU window as a persistent Doxxer live VM.
+It is not a browser preview, and the window stays open until it is closed
+manually. The live VM can be controlled independently:
+
+```powershell
+.\tools\live.ps1 -Action Status
+.\tools\live.ps1 -Action Reset
+.\tools\live.ps1 -Action Reload -Media disk
+.\tools\live.ps1 -Action Stop
+```
+
+The boot trace presents actual kernel initialization results. An active check
+is yellow `PROGRESS`, a verified 100% check is green `PASSED`, and a failed
+check is red `FAIL`. A failure never advances to the logo: F5 reboots
+immediately and a 60-second watchdog reboots automatically. After every check
+reaches 100%, the trace remains visible for five seconds, followed by the
+Doxxer logo for thirty seconds.
+
 ## Design principles
 
 1. Keep the trusted computing base small.

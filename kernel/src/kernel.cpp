@@ -32,6 +32,7 @@ namespace {
 [[noreturn]] void protected_kernel_main() {
     using namespace doxxer;
 
+    graphics::stage_progress(graphics::BootStage::ShadowRegions, 10);
     if (!arch::x86_64::protection::on_kernel_stack()) {
         panic("KERNEL STACK TRANSITION FAILED");
     }
@@ -53,7 +54,9 @@ namespace {
     log::write_decimal(shadow_stats.capacity);
     log::write("\n");
     log::success("GUARDED SHADOW MEMORY REGIONS ONLINE");
+    graphics::stage_pass(graphics::BootStage::ShadowRegions);
 
+    graphics::stage_progress(graphics::BootStage::KernelHeap, 10);
     if (!memory::heap::initialize()) {
         panic("KERNEL HEAP INITIALIZATION FAILED");
     }
@@ -70,7 +73,9 @@ namespace {
     log::write_decimal(heap_stats.quarantined_objects);
     log::write("\n");
     log::success("HARDENED HEAP ONLINE");
+    graphics::stage_pass(graphics::BootStage::KernelHeap);
 
+    graphics::stage_progress(graphics::BootStage::CapabilityModel, 10);
     if (!security::capability::initialize()) {
         panic("CAPABILITY REGISTRY INITIALIZATION FAILED");
     }
@@ -85,7 +90,9 @@ namespace {
     log::write_decimal(capability_stats.rejected_operations);
     log::write("\n");
     log::success("CAPABILITY SECURITY MODEL ONLINE");
+    graphics::stage_pass(graphics::BootStage::CapabilityModel);
 
+    graphics::stage_progress(graphics::BootStage::IpcEvents, 10);
     if (!ipc::initialize() || !ipc::self_test()) {
         log::write("[ERROR] IPC SELF-TEST STAGE: ");
         log::write_decimal(ipc::failure_code());
@@ -113,7 +120,9 @@ namespace {
     log::write_decimal(event_stats.successful_waits);
     log::write(" WAITS\n");
     log::success("CAPABILITY EVENTS ONLINE");
+    graphics::stage_pass(graphics::BootStage::IpcEvents);
 
+    graphics::stage_progress(graphics::BootStage::ProcessContainers, 10);
     if (!process::initialize() || !process::self_test()) {
         log::write("[ERROR] PROCESS SELF-TEST STAGE: ");
         log::write_decimal(process::failure_code());
@@ -127,7 +136,9 @@ namespace {
     log::write_decimal(process_stats.destroyed_processes);
     log::write(" DESTROYED\n");
     log::success("ISOLATED PROCESS CONTAINERS ONLINE");
+    graphics::stage_pass(graphics::BootStage::ProcessContainers);
 
+    graphics::stage_progress(graphics::BootStage::SyscallAbi, 10);
     if (!syscall::initialize() || !syscall::self_test()) {
         log::write("[ERROR] SYSCALL ABI SELF-TEST STAGE: ");
         log::write_decimal(syscall::failure_code());
@@ -147,7 +158,9 @@ namespace {
     log::write_decimal(syscall_stats.user_copy_rejections);
     log::write(" COPY REJECTIONS\n");
     log::success("USER SYSCALL COPY GATEWAY ONLINE");
+    graphics::stage_pass(graphics::BootStage::SyscallAbi);
 
+    graphics::stage_progress(graphics::BootStage::ServiceRegistry, 10);
     if (!service::initialize() || !service::self_test()) {
         log::write("[ERROR] SERVICE REGISTRY SELF-TEST STAGE: ");
         log::write_decimal(service::failure_code());
@@ -161,7 +174,9 @@ namespace {
     log::write_decimal(service_stats.resolutions);
     log::write(" RESOLVED\n");
     log::success("CAPABILITY SERVICE REGISTRY ONLINE");
+    graphics::stage_pass(graphics::BootStage::ServiceRegistry);
 
+    graphics::stage_progress(graphics::BootStage::UserMemory, 10);
     if (!memory::user_copy::self_test()) {
         log::write("[ERROR] USER COPY SELF-TEST STAGE: ");
         log::write_decimal(memory::user_copy::failure_code());
@@ -173,7 +188,9 @@ namespace {
     log::write_decimal(copy_stats.bytes_copied);
     log::write("\n");
     log::success("VALIDATED USER MEMORY ACCESS ONLINE");
+    graphics::stage_pass(graphics::BootStage::UserMemory);
 
+    graphics::stage_progress(graphics::BootStage::ImagePolicy, 10);
     if (!security::image_policy::initialize() || !security::image_policy::self_test()) {
         log::write("[ERROR] IMAGE POLICY SELF-TEST STAGE: ");
         log::write_decimal(security::image_policy::failure_code());
@@ -202,7 +219,9 @@ namespace {
     log::write_decimal(image_policy_stats.rejected_images);
     log::write("\n");
     log::success("SEALED IMAGE TRUST POLICY ONLINE");
+    graphics::stage_pass(graphics::BootStage::ImagePolicy);
 
+    graphics::stage_progress(graphics::BootStage::UserThreads, 10);
     if (!thread::user::initialize() || !thread::user::self_test()) {
         log::write("[ERROR] USER THREAD SELF-TEST STAGE: ");
         log::write_decimal(thread::user::failure_code());
@@ -216,7 +235,9 @@ namespace {
     log::write_decimal(thread_stats.destroyed_threads);
     log::write(" DESTROYED\n");
     log::success("GUARDED USER THREAD CONTEXTS ONLINE");
+    graphics::stage_pass(graphics::BootStage::UserThreads);
 
+    graphics::stage_progress(graphics::BootStage::Ring3Boundary, 10);
     if (!arch::x86_64::ring3::self_test()) {
         log::write("[ERROR] RING-3 SELF-TEST STAGE: ");
         log::write_decimal(arch::x86_64::ring3::failure_code());
@@ -226,6 +247,7 @@ namespace {
     log::success("RING-3 SYSCALL TRANSITION VERIFIED");
     log::success("END-TO-END USER ABI DISPATCH VERIFIED");
 
+    graphics::stage_progress(graphics::BootStage::Acpi, 10);
     if (!firmware::acpi::initialize(boot::rsdp_request.response)) {
         log::write("[ERROR] ACPI FAILURE STAGE: ");
         log::write_decimal(firmware::acpi::failure_code());
@@ -242,7 +264,9 @@ namespace {
     log::write_decimal(topology->io_apic_count);
     log::write("\n");
     log::success("ACPI TABLES VALIDATED");
+    graphics::stage_pass(graphics::BootStage::Acpi);
 
+    graphics::stage_progress(graphics::BootStage::DmaProtection, 10);
     if (!arch::x86_64::iommu::initialize(*topology) ||
         !arch::x86_64::iommu::self_test()) {
         log::write("[ERROR] IOMMU FAILURE STAGE: ");
@@ -265,7 +289,9 @@ namespace {
     log::write("\n");
     log::success("DMA REMAPPING DEFAULT-DENY");
     log::success("DMA ROOT TABLES PINNED");
+    graphics::stage_pass(graphics::BootStage::DmaProtection);
 
+    graphics::stage_progress(graphics::BootStage::SmpHardening, 10);
     if (!arch::x86_64::apic::initialize(*topology)) {
         log::write("[ERROR] APIC FAILURE STAGE: ");
         log::write_decimal(arch::x86_64::apic::failure_code());
@@ -319,6 +345,8 @@ namespace {
         panic("ALL-CPU SYSCALL INITIALIZATION FAILED");
     }
     log::success("ALL-CPU SYSCALL MSRS VERIFIED");
+    graphics::stage_pass(graphics::BootStage::SmpHardening);
+    graphics::stage_progress(graphics::BootStage::Scheduler, 10);
     if (!scheduler::initialize()) {
         log::write("[ERROR] SCHEDULER FAILURE STAGE: ");
         log::write_decimal(scheduler::failure_code());
@@ -347,6 +375,8 @@ namespace {
     log::write_decimal(scheduler_stats.user_context_rejections);
     log::write("\n");
     log::success("SCHEDULER USER CONTEXT BINDING VERIFIED");
+    graphics::stage_pass(graphics::BootStage::Scheduler);
+    graphics::stage_progress(graphics::BootStage::Ring3Boundary, 80);
     if (!arch::x86_64::ring3::runtime_self_test()) {
         log::write("[ERROR] RUNTIME SYSCALL SELF-TEST STAGE: ");
         log::write_decimal(arch::x86_64::ring3::failure_code());
@@ -367,6 +397,8 @@ namespace {
     log::write_decimal(dispatch_stats.active_executions);
     log::write(" ACTIVE\n");
     log::success("CAPABILITY-BOUND USER THREAD DISPATCH VERIFIED");
+    graphics::stage_pass(graphics::BootStage::Ring3Boundary);
+    graphics::stage_progress(graphics::BootStage::ApicTimer, 10);
     if (!arch::x86_64::apic::timer_self_test()) {
         log::write("[ERROR] APIC TIMER FAILURE STAGE: ");
         log::write_decimal(arch::x86_64::apic::failure_code());
@@ -379,23 +411,16 @@ namespace {
     log::write_decimal(arch::x86_64::apic::timer_ticks());
     log::write("\n");
     log::success("APIC TIMER ONLINE");
-
-    const volatile limine_framebuffer_response* framebuffer_response =
-        boot::framebuffer_request.response;
-    if (framebuffer_response == nullptr || framebuffer_response->framebuffers == nullptr ||
-        framebuffer_response->framebuffer_count == 0) {
-        panic("FRAMEBUFFER UNAVAILABLE");
-    }
-
-    if (!graphics::initialize(framebuffer_response->framebuffers[0])) {
-        panic("UNSUPPORTED FRAMEBUFFER");
-    }
-    graphics::draw_boot_banner();
-    log::attach_framebuffer();
-    log::success("FRAMEBUFFER ONLINE");
+    graphics::stage_pass(graphics::BootStage::ApicTimer);
     log::success("KERNEL READY");
     log::line("DOXXER_BOOT_OK");
-
+#ifndef DOXXER_TEST_MODE
+    platform::delay_milliseconds(5000);
+#endif
+    graphics::draw_boot_logo();
+#ifndef DOXXER_TEST_MODE
+    platform::delay_milliseconds(30000);
+#endif
     platform::test_success();
 }
 }
@@ -414,12 +439,29 @@ extern "C" [[noreturn]] void kernel_main() {
         panic("UNSUPPORTED LIMINE BASE REVISION");
     }
 
+    const volatile limine_framebuffer_response* framebuffer_response =
+        boot::framebuffer_request.response;
+    if (framebuffer_response == nullptr || framebuffer_response->framebuffers == nullptr ||
+        framebuffer_response->framebuffer_count == 0) {
+        panic("FRAMEBUFFER UNAVAILABLE");
+    }
+    if (!graphics::initialize(framebuffer_response->framebuffers[0])) {
+        panic("UNSUPPORTED FRAMEBUFFER");
+    }
+    graphics::draw_boot_trace();
+    graphics::stage_progress(graphics::BootStage::Framebuffer, 50);
+    log::success("FRAMEBUFFER ONLINE");
+    graphics::stage_pass(graphics::BootStage::Framebuffer);
+
+    graphics::stage_progress(graphics::BootStage::Entropy, 10);
     const volatile limine_entropy_response* entropy = boot::entropy_request.response;
     if (entropy == nullptr || entropy->values == nullptr || entropy->value_count == 0) {
         panic("BOOT ENTROPY UNAVAILABLE");
     }
     log::success("STACK GUARD SEEDED");
+    graphics::stage_pass(graphics::BootStage::Entropy);
 
+    graphics::stage_progress(graphics::BootStage::SealedMemory, 10);
     if (!security::sealed_memory::initialize(entropy->values, entropy->value_count) ||
         !security::sealed_memory::self_test()) {
         log::write("[ERROR] SEALED MEMORY SELF-TEST STAGE: ");
@@ -437,6 +479,7 @@ extern "C" [[noreturn]] void kernel_main() {
     log::write_decimal(sealed_stats.capacity);
     log::write("\n");
     log::success("AUTHENTICATED SEALED MEMORY ONLINE");
+    graphics::stage_pass(graphics::BootStage::SealedMemory);
 
     const volatile limine_bootloader_info_response* bootloader =
         boot::bootloader_info_request.response;
@@ -452,6 +495,7 @@ extern "C" [[noreturn]] void kernel_main() {
 
     const volatile limine_memmap_response* memory_map = boot::memmap_request.response;
     const volatile limine_hhdm_response* hhdm = boot::hhdm_request.response;
+    graphics::stage_progress(graphics::BootStage::PhysicalMemory, 10);
     u64 memory_integrity_key = entropy->values[0] ^ 0x5348'4144'4F57'4D45ULL;
     if (entropy->value_count > 1) {
         const u64 second = entropy->values[1];
@@ -483,7 +527,9 @@ extern "C" [[noreturn]] void kernel_main() {
     log::write("\n");
     log::success("PMM ONLINE");
     log::success("SEALED SHADOW PAGE LEDGER ONLINE");
+    graphics::stage_pass(graphics::BootStage::PhysicalMemory);
 
+    graphics::stage_progress(graphics::BootStage::VirtualMemory, 10);
     if (!memory::virtual_memory::self_test()) {
         log::write("[ERROR] VMM SELF-TEST STAGE: ");
         log::write_decimal(memory::virtual_memory::self_test_failure());
@@ -504,7 +550,9 @@ extern "C" [[noreturn]] void kernel_main() {
     log::write(" REJECTIONS\n");
     log::success("MAPPED USER PAGE LIFETIMES PINNED");
     log::success("USER HHDM ACCESS API SEALED");
+    graphics::stage_pass(graphics::BootStage::VirtualMemory);
 
+    graphics::stage_progress(graphics::BootStage::CpuProtection, 10);
     if (!arch::x86_64::protection::initialize()) {
         panic("CPU PROTECTION INITIALIZATION FAILED");
     }
@@ -543,5 +591,6 @@ extern "C" [[noreturn]] void kernel_main() {
     log::success("PAGE-TABLE GRAPH LIFETIMES PINNED");
     log::success("SUPERVISOR STACK WINDOWS ISOLATED");
     log::success("EXCEPTION AND GUARD SELF-TEST PASSED");
+    graphics::stage_pass(graphics::BootStage::CpuProtection);
     arch::x86_64::protection::enter_kernel_stack(protected_kernel_main);
 }
