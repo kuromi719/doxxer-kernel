@@ -81,6 +81,47 @@ void fill_rect(u64 x, u64 y, u64 width, u64 height, u32 value) {
 }
 void hline(u64 x, u64 y, u64 width, u32 value) { fill_rect(x, y, width, 1, value); }
 void vline(u64 x, u64 y, u64 height, u32 value) { fill_rect(x, y, 1, height, value); }
+void blend_pixel(u64 x, u64 y, u32 foreground, u8 alpha);
+struct Point { int x; int y; };
+void polygon(const Point* points, u64 count, u64 ox, u64 oy, u32 ink) {
+    if (count < 3) return;
+    int min_x = points[0].x, max_x = points[0].x;
+    int min_y = points[0].y, max_y = points[0].y;
+    for (u64 i = 1; i < count; ++i) {
+        if (points[i].x < min_x) min_x = points[i].x;
+        if (points[i].x > max_x) max_x = points[i].x;
+        if (points[i].y < min_y) min_y = points[i].y;
+        if (points[i].y > max_y) max_y = points[i].y;
+    }
+    // Four coverage samples per pixel keep the diagonal identity crisp without
+    // storing a raster image of the emblem in the kernel.
+    for (int y = min_y; y < max_y; ++y) {
+        for (int x = min_x; x < max_x; ++x) {
+            u8 hits = 0;
+            for (int sy = 0; sy < 2; ++sy) for (int sx = 0; sx < 2; ++sx) {
+                const int px = x * 4 + sx * 2 + 1;
+                const int py = y * 4 + sy * 2 + 1;
+                bool inside = false;
+                for (u64 i = 0, j = count - 1; i < count; j = i++) {
+                    const int ax = points[i].x * 4, ay = points[i].y * 4;
+                    const int bx = points[j].x * 4, by = points[j].y * 4;
+                    if ((ay > py) != (by > py)) {
+                        const int64_t cross = static_cast<int64_t>(px - ax) * (by - ay)
+                                            - static_cast<int64_t>(py - ay) * (bx - ax);
+                        if ((cross < 0) == (by > ay)) inside = !inside;
+                    }
+                }
+                if (inside) ++hits;
+            }
+            if (x >= 0 && y >= 0 && hits != 0)
+                blend_pixel(ox + static_cast<u64>(x), oy + static_cast<u64>(y), ink,
+                            static_cast<u8>(hits * 255U / 4U));
+        }
+    }
+}
+template <u64 N> void polygon(const Point (&points)[N], u64 x, u64 y, u32 ink) {
+    polygon(points, N, x, y, ink);
+}
 [[maybe_unused]] void thick_line(int64_t x0, int64_t y0, int64_t x1, int64_t y1,
                                  u64 thickness, u32 value) {
     int64_t dx = x1 > x0 ? x1 - x0 : x0 - x1;
@@ -103,6 +144,22 @@ void draw_mask(const u8* alpha, u64 width, u64 height, u64 x, u64 y, u32 value_c
     for (u64 row = 0; row < height; ++row)
         for (u64 column = 0; column < width; ++column)
             blend_pixel(x + column, y + row, value_color, alpha[row * width + column]);
+}
+void draw_mask_short(const u8* alpha, u64 width, u64 height, u64 target_height,
+                     u64 x, u64 y, u32 ink) {
+    for (u64 row = 0; row < target_height; ++row) {
+        const u64 sample = row * (height - 1U);
+        const u64 source_row = sample / (target_height - 1U);
+        const u64 fraction = sample % (target_height - 1U);
+        const u64 next_row = source_row + 1U < height ? source_row + 1U : source_row;
+        for (u64 column = 0; column < width; ++column) {
+            const u64 upper = alpha[source_row * width + column];
+            const u64 lower = alpha[next_row * width + column];
+            const u8 coverage = static_cast<u8>((upper * (target_height - 1U - fraction)
+                                    + lower * fraction) / (target_height - 1U));
+            blend_pixel(x + column, y + row, ink, coverage);
+        }
+    }
 }
 void draw_glyph(char value, u64 x, u64 y, u64 mode, u32 value_color) {
     if (value >= 'a' && value <= 'z') value = static_cast<char>(value - ('a' - 'A'));
@@ -143,15 +200,21 @@ void draw_frame() {
     vline(active->width - inset - 1, inset, active->height - 2 * inset, purple);
     vline(active->width - inset2 - 1, inset2, active->height - 2 * inset2, purple);
     const u64 mark = active->width >= 800 ? 5 : 3;
-    fill_rect(inset2 + 7, inset2 + 7, mark, mark, purple);
-    fill_rect(inset2 + 10 + mark, inset2 + 7, mark, mark, purple);
-    fill_rect(inset2 + 7, inset2 + 10 + mark, mark, mark, purple);
-    fill_rect(active->width - inset2 - 7 - mark, inset2 + 7, mark, mark, purple);
-    fill_rect(active->width - inset2 - 10 - 2 * mark, inset2 + 7, mark, mark, purple);
-    fill_rect(active->width - inset2 - 7 - mark, inset2 + 10 + mark, mark, mark, purple);
-    fill_rect(inset2 + 7, active->height - inset2 - 7 - mark, mark, mark, purple);
-    fill_rect(inset2 + 10 + mark, active->height - inset2 - 7 - mark, mark, mark, purple);
-    fill_rect(active->width - inset2 - 7 - mark, active->height - inset2 - 7 - mark, mark, mark, purple);
+    const u64 edge = inset2 + 7;
+    const u64 far_x = active->width - edge - mark;
+    const u64 far_y = active->height - edge - mark;
+    const u64 step = mark + 3;
+    for (u64 cx = 0; cx < 2; ++cx) for (u64 cy = 0; cy < 2; ++cy) {
+        const u64 anchor_x = cx == 0 ? edge : far_x;
+        const u64 anchor_y = cy == 0 ? edge : far_y;
+        const int64_t dx = cx == 0 ? static_cast<int64_t>(step) : -static_cast<int64_t>(step);
+        const int64_t dy = cy == 0 ? static_cast<int64_t>(step) : -static_cast<int64_t>(step);
+        fill_rect(anchor_x, anchor_y, mark, mark, purple);
+        fill_rect(static_cast<u64>(static_cast<int64_t>(anchor_x) + dx), anchor_y,
+                  mark, mark, purple);
+        fill_rect(anchor_x, static_cast<u64>(static_cast<int64_t>(anchor_y) + dy),
+                  mark, mark, purple);
+    }
 }
 void paint_background() {
     const u32 base = color(8, 1, 18);
@@ -304,18 +367,51 @@ void draw_boot_logo() {
     if (active == nullptr) return;
     paint_background();
     draw_frame();
-    const u32 purple = color(190, 60, 255);
-    const u32 deep_purple = color(116, 36, 224);
-    const u32 bright_purple = color(226, 120, 255);
+    const u32 purple = color(190, 48, 250);
+    const u32 deep_purple = color(111, 34, 218);
+    const u32 bright_purple = color(219, 106, 255);
     const u32 pale = color(238, 221, 247);
-    const u64 emblem_x = (active->width - kEmblemWidth) / 2U;
-    const u64 emblem_y = active->height / 8U;
-    draw_mask(kEmblemOuterAlpha, kEmblemWidth, kEmblemHeight,
-              emblem_x, emblem_y, bright_purple);
-    draw_mask(kEmblemInnerAlpha, kEmblemWidth, kEmblemHeight,
-              emblem_x, emblem_y, deep_purple);
-    draw_mask(kEmblemDAlpha, kEmblemWidth, kEmblemHeight,
-              emblem_x, emblem_y, purple);
+    // The reference artwork is a 1280x383 composition. Keep its 240-pixel
+    // crest and wordmark proportions rather than stretching them to 720p.
+    const u64 emblem_x = (active->width - 240U) / 2U;
+    const u64 emblem_y = (active->height - 383U) / 2U + 15U;
+    constexpr Point outer[] = {{120, 8}, {217, 64}, {217, 176},
+                               {120, 232}, {23, 176}, {23, 64}};
+    constexpr Point inner[] = {{120, 25}, {202, 73}, {202, 167},
+                               {120, 215}, {38, 167}, {38, 73}};
+    for (u64 i = 0; i < 6; ++i) {
+        const Point a = outer[i], b = outer[(i + 1U) % 6U];
+        thick_line(static_cast<int64_t>(emblem_x) + a.x,
+                   static_cast<int64_t>(emblem_y) + a.y,
+                   static_cast<int64_t>(emblem_x) + b.x,
+                   static_cast<int64_t>(emblem_y) + b.y, 4, bright_purple);
+        const Point c = inner[i], d = inner[(i + 1U) % 6U];
+        thick_line(static_cast<int64_t>(emblem_x) + c.x,
+                   static_cast<int64_t>(emblem_y) + c.y,
+                   static_cast<int64_t>(emblem_x) + d.x,
+                   static_cast<int64_t>(emblem_y) + d.y, 4, deep_purple);
+    }
+    // Recessed horizontal tracks inside the crest, drawn before the D.
+    for (u64 y = 117; y < 195; y += 5) {
+        const u64 left = y > 167 ? 38U + (y - 167U) * 82U / 48U : 38U;
+        const u64 right = 240U - left;
+        hline(emblem_x + left + 6U, emblem_y + y, right - left - 12U,
+              color(73, 20, 112));
+    }
+    // An original, beveled letterform: a slanted stem, stepped top and
+    // chamfered bowl. It is framebuffer geometry, not a pasted logo image.
+    constexpr Point stem[] = {{66, 63}, {94, 87}, {94, 154}, {66, 180}};
+    constexpr Point top[] = {{66, 63}, {142, 63}, {174, 87}, {150, 97},
+                             {135, 91}, {94, 91}};
+    constexpr Point bowl[] = {{150, 97}, {174, 87}, {174, 151}, {143, 180},
+                              {66, 180}, {94, 154}, {136, 154}, {150, 144}};
+    constexpr Point cap[] = {{66, 63}, {142, 63}, {158, 77}, {94, 77}};
+    constexpr Point facet[] = {{66, 63}, {94, 87}, {94, 154}, {77, 170}};
+    polygon(stem, emblem_x, emblem_y, purple);
+    polygon(top, emblem_x, emblem_y, purple);
+    polygon(bowl, emblem_x, emblem_y, purple);
+    polygon(cap, emblem_x, emblem_y, bright_purple);
+    polygon(facet, emblem_x, emblem_y, deep_purple);
 
     auto logo_text_width = [](const char* text) -> u64 {
         u64 width = 0;
@@ -331,21 +427,29 @@ void draw_boot_logo() {
             char value = *text++;
             if (value < ' ' || value > '_') value = '?';
             const u64 index = static_cast<u8>(value) - static_cast<u8>(' ');
-            draw_mask(kLogoFontAlpha + index * kLogoFontWidth * kLogoFontHeight,
-                      kLogoFontWidth, kLogoFontHeight, x, y, ink);
+            draw_mask_short(kLogoFontAlpha + index * kLogoFontWidth * kLogoFontHeight,
+                            kLogoFontWidth, kLogoFontHeight, 80U, x, y, ink);
             x += kLogoAdvance[index];
         }
     };
-    constexpr u64 gap = 18U;
+    constexpr u64 gap = 4U;
+    constexpr u64 xx_width = 104U;
     const u64 right_width = logo_text_width("ER - OS");
-    const u64 total = logo_text_width("DO") + gap + kXxWidth + gap + right_width;
+    const u64 total = logo_text_width("DO") + gap + xx_width + gap + right_width;
     u64 x = (active->width - total) / 2U;
-    const u64 y = emblem_y + kEmblemHeight + 42U;
+    const u64 y = emblem_y + 220U;
     draw_logo_text("DO", x, y, pale);
     x += logo_text_width("DO") + gap;
-    draw_mask(kXxAlpha0, kXxWidth, kXxHeight, x, y + 2U, deep_purple);
-    draw_mask(kXxAlpha1, kXxWidth, kXxHeight, x, y + 2U, purple);
-    x += kXxWidth + gap;
+    // The two Xs share one cap-height and overlap as a single wordmark.
+    constexpr Point first_x[] = {{0, 0}, {16, 0}, {34, 15}, {52, 0},
+                                 {68, 0}, {43, 22}, {68, 43}, {52, 43},
+                                 {34, 29}, {16, 43}, {0, 43}, {25, 22}};
+    constexpr Point second_x[] = {{37, 0}, {53, 0}, {71, 15}, {89, 0},
+                                  {104, 0}, {80, 22}, {104, 43}, {89, 43},
+                                  {71, 29}, {53, 43}, {37, 43}, {62, 22}};
+    polygon(first_x, x, y + 22U, deep_purple);
+    polygon(second_x, x, y + 22U, purple);
+    x += xx_width + gap;
     draw_logo_text("ER - OS", x, y, pale);
 }
 

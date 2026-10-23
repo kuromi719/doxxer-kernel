@@ -5,9 +5,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $qemu = 'C:\Progra~1\qemu\qemu-system-x86_64.exe'
 $firmware = 'C:\Progra~1\qemu\share\edk2-x86_64-code.fd'
 $logDir = Join-Path $root 'build\test-logs'
+$testDist = Join-Path $root 'dist\test'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-& (Join-Path $PSScriptRoot 'invoke-make.ps1') -Target clean
 & (Join-Path $PSScriptRoot 'invoke-make.ps1') -Target all -Arguments @('TEST_MODE=1')
 
 function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory = '512M', [int]$Processors = 4) {
@@ -111,9 +111,9 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
     Write-Host "$Name smoke test passed." -ForegroundColor Green
 }
 
-Invoke-SmokeTest 'disk' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')")
-Invoke-SmokeTest 'iso' @('-cdrom',(Join-Path $root 'dist\doxxer.iso'))
-Invoke-SmokeTest 'lowmem' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')") '128M'
-Invoke-SmokeTest 'highmem' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')") '5G'
-Invoke-SmokeTest 'singlecpu' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')") '512M' 1
-Invoke-SmokeTest 'eightcpu' @('-drive',"format=raw,file=$(Join-Path $root 'dist\doxxer-uefi.img')") '512M' 8
+Invoke-SmokeTest 'disk' @('-drive',"format=raw,file=$(Join-Path $testDist 'doxxer-uefi.img')")
+Invoke-SmokeTest 'iso' @('-cdrom',(Join-Path $testDist 'doxxer.iso'))
+Invoke-SmokeTest 'lowmem' @('-drive',"format=raw,file=$(Join-Path $testDist 'doxxer-uefi.img')") '128M'
+Invoke-SmokeTest 'highmem' @('-drive',"format=raw,file=$(Join-Path $testDist 'doxxer-uefi.img')") '5G'
+Invoke-SmokeTest 'singlecpu' @('-drive',"format=raw,file=$(Join-Path $testDist 'doxxer-uefi.img')") '512M' 1
+Invoke-SmokeTest 'eightcpu' @('-drive',"format=raw,file=$(Join-Path $testDist 'doxxer-uefi.img')") '512M' 8

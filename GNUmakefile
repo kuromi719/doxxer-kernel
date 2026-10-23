@@ -3,16 +3,17 @@ SHELL := /usr/bin/bash
 .DELETE_ON_ERROR:
 
 BUILD_DIR := build
-DIST_DIR := dist
-OBJ_DIR := $(BUILD_DIR)/obj
-KERNEL := $(BUILD_DIR)/doxxer-kernel.elf
-KERNEL_MAP := $(BUILD_DIR)/doxxer-kernel.map
+MODE_SUFFIX := $(if $(filter 1,$(TEST_MODE)),-test,)
+DIST_DIR := dist$(if $(filter 1,$(TEST_MODE)),/test,)
+OBJ_DIR := $(BUILD_DIR)/obj$(MODE_SUFFIX)
+KERNEL := $(BUILD_DIR)/doxxer-kernel$(MODE_SUFFIX).elf
+KERNEL_MAP := $(BUILD_DIR)/doxxer-kernel$(MODE_SUFFIX).map
 LIMINE_BUILD := $(BUILD_DIR)/limine-build
 LIMINE_PREFIX := $(BUILD_DIR)/limine-install
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 LIMINE_STAMP := $(LIMINE_PREFIX)/.ready
-ISO_ROOT := $(BUILD_DIR)/iso-root
-DISK_ROOT := $(BUILD_DIR)/disk-root
+ISO_ROOT := $(BUILD_DIR)/iso-root$(MODE_SUFFIX)
+DISK_ROOT := $(BUILD_DIR)/disk-root$(MODE_SUFFIX)
 ISO := $(DIST_DIR)/doxxer.iso
 DISK := $(DIST_DIR)/doxxer-uefi.img
 
@@ -125,7 +126,12 @@ test:
 	@powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/test.ps1
 
 clean:
-	@rm -rf $(OBJ_DIR) $(KERNEL) $(KERNEL_MAP) $(ISO_ROOT) $(DISK_ROOT) $(ISO) $(DISK)
+	@rm -rf $(BUILD_DIR)/obj $(BUILD_DIR)/obj-test \
+		$(BUILD_DIR)/doxxer-kernel.elf $(BUILD_DIR)/doxxer-kernel-test.elf \
+		$(BUILD_DIR)/doxxer-kernel.map $(BUILD_DIR)/doxxer-kernel-test.map \
+		$(BUILD_DIR)/iso-root $(BUILD_DIR)/iso-root-test \
+		$(BUILD_DIR)/disk-root $(BUILD_DIR)/disk-root-test \
+		dist/doxxer.iso dist/doxxer-uefi.img dist/test
 
 distclean: clean
 	@rm -rf $(LIMINE_BUILD) $(LIMINE_PREFIX)
