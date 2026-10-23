@@ -9,7 +9,7 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - x86_64 UEFI boot through Limine
 - QEMU + EDK2 development target
 - COM1 serial logging
-- Monochrome framebuffer logo and boot status
+- Framebuffer boot trace and centered Doxxer wordmark
 - Entropy-seeded stack protector
 - Zone-aware physical page allocator with secure page wiping
 - Contiguous and aligned page allocation with boot-time invariants
@@ -123,6 +123,13 @@ and final idle state. A failure never advances to the logo: F5 reboots
 immediately and a 60-second watchdog reboots automatically. After every check
 reaches 100%, the trace remains visible for five seconds, followed by the
 Doxxer logo for thirty seconds.
+
+The logo screen displays only the user-supplied 556 x 69 wordmark, centered at
+native size on a dark background. Its source is `assets/boot-wordmark.png`;
+`kernel/src/graphics/boot_wordmark.inc` contains the same RGB pixels so the
+freestanding kernel needs no PNG decoder. If the source changes, regenerate the
+header with `python tools/generate-boot-wordmark.py` (Pillow is needed only for
+this development step, not for building or booting Doxxer).
 
 ## Design principles
 
