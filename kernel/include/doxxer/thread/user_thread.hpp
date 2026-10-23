@@ -7,7 +7,8 @@
 namespace doxxer::thread::user {
 enum class State : u8 {
     ready = 1,
-    exited = 2,
+    running = 2,
+    exited = 3,
 };
 
 struct Handle {
@@ -35,6 +36,15 @@ struct CreateResult {
     security::capability::Token control;
 };
 
+struct ExecutionLease {
+    process::AddressSpaceLease* address_space;
+    void* thread_cookie;
+    Context context;
+    u64 identifier;
+    u32 generation;
+    bool active;
+};
+
 struct Info {
     u64 identifier;
     State state;
@@ -47,8 +57,11 @@ struct Info {
 
 struct Statistics {
     u32 active_threads;
+    u32 active_executions;
     u64 created_threads;
     u64 destroyed_threads;
+    u64 executions_started;
+    u64 executions_completed;
     u64 rejected_operations;
 };
 
@@ -58,6 +71,10 @@ bool create(security::capability::DomainHandle manager,
             CreateResult& result);
 bool inspect(security::capability::DomainHandle manager,
              security::capability::Token thread_control, Info& info);
+bool acquire_execution(security::capability::DomainHandle manager,
+                       security::capability::Token thread_control, ExecutionLease& lease);
+bool validate_execution_lease(const ExecutionLease& lease);
+bool release_execution(ExecutionLease& lease);
 bool terminate(security::capability::DomainHandle manager,
                security::capability::Token thread_control, u32 exit_code);
 bool destroy(security::capability::DomainHandle manager,

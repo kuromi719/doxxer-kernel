@@ -17,7 +17,7 @@ constexpr u64 kTagMask = (1ULL << 36U) - 1ULL;
 constexpr u32 kMaximumDerivationDepth = 8;
 constexpr Rights kKnownRights = rights(Right::inspect) | Right::read | Right::write |
                                 Right::signal | Right::wait | Right::map | Right::derive |
-                                Right::transfer | Right::administer;
+                                Right::transfer | Right::administer | Right::execute;
 
 struct CapabilityEntry {
     bool active;

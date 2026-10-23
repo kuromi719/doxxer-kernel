@@ -9,6 +9,7 @@
 #include <doxxer/scheduler/scheduler.hpp>
 #include <doxxer/security/capability.hpp>
 #include <doxxer/syscall/dispatcher.hpp>
+#include <doxxer/thread/user_thread.hpp>
 
 extern "C" void doxxer_enter_ring3_probe(doxxer::u64 root_physical,
                                            doxxer::u64 user_instruction,
@@ -156,12 +157,14 @@ bool install_runtime_cpu() {
 }
 
 bool handle_runtime_user_exception(interrupts::ExceptionFrame& frame, u64 fault_address) {
-    auto* context = static_cast<process::AddressSpaceLease*>(
+    auto* execution = static_cast<thread::user::ExecutionLease*>(
         arch::x86_64::smp::current_syscall_context());
-    if (doxxer_runtime_probe_active != 1 || context == nullptr || frame.vector != 6 ||
+    if (doxxer_runtime_probe_active != 1 || execution == nullptr ||
+        !thread::user::validate_execution_lease(*execution) ||
+        execution->address_space == nullptr || frame.vector != 6 ||
         frame.error_code != 0 || frame.cs != 0x23 || frame.ss != 0x1B || fault_address != 0 ||
         frame.rip != kUserCode + kRuntimeUserFaultOffset || runtime_user_exceptions != 0 ||
-        !valid_runtime_return(*context, frame.rip, frame.rsp, frame.rflags)) {
+        !valid_runtime_return(*execution->address_space, frame.rip, frame.rsp, frame.rflags)) {
         return false;
     }
     runtime_user_exceptions = 1;
@@ -192,8 +195,10 @@ extern "C" u64 doxxer_runtime_syscall_dispatch(void* context, u64 user_request,
     if (context == nullptr) {
         return kRuntimeProbeFatal;
     }
-    auto& lease = *static_cast<process::AddressSpaceLease*>(context);
-    if (!valid_runtime_return(lease, user_rip, user_rsp, user_rflags)) {
+    auto& execution = *static_cast<thread::user::ExecutionLease*>(context);
+    if (!thread::user::validate_execution_lease(execution) ||
+        execution.address_space == nullptr ||
+        !valid_runtime_return(*execution.address_space, user_rip, user_rsp, user_rflags)) {
         return kRuntimeProbeFatal;
     }
     ++runtime_probe_calls;
@@ -208,7 +213,8 @@ extern "C" u64 doxxer_runtime_syscall_dispatch(void* context, u64 user_request,
     runtime_first_rip = user_rip;
     runtime_first_rsp = user_rsp;
     runtime_first_rflags = user_rflags;
-    return static_cast<u64>(syscall::dispatch_user(lease, user_request, user_response));
+    return static_cast<u64>(
+        syscall::dispatch_user(*execution.address_space, user_request, user_response));
 }
 
 bool self_test() {
@@ -471,21 +477,22 @@ bool runtime_self_test() {
     security::capability::DomainHandle manager{};
     process::CreateResult child{};
     process::AddressSpaceLease lease{};
+    thread::user::CreateResult user_thread{};
+    thread::user::ExecutionLease execution{};
     memory::physical::IsolationDomain domain = memory::physical::kKernelDomain;
     u64 code_page = 0;
-    u64 stack_page = 0;
     u64 request_page = 0;
     u64 response_page = 0;
     bool manager_created = false;
     bool process_created = false;
     bool lease_acquired = false;
+    bool thread_created = false;
+    bool execution_acquired = false;
     scheduler::UserContextBinding context_binding{};
     bool code_allocated = false;
-    bool stack_allocated = false;
     bool request_allocated = false;
     bool response_allocated = false;
     bool code_mapped = false;
-    bool stack_mapped = false;
     bool request_mapped = false;
     bool response_mapped = false;
     bool msrs_installed = false;
@@ -494,8 +501,7 @@ bool runtime_self_test() {
     u64 old_lstar = 0;
     u64 old_fmask = 0;
     syscall::Response response{};
-    const u64 user_stack_pointer =
-        kUserStackBase + memory::physical::kPageSize - 16;
+    u64 user_stack_pointer = 0;
 
     manager_created = security::capability::create_domain(manager);
     process_created = manager_created && process::create(manager, "runtime-syscall", child);
@@ -508,13 +514,11 @@ bool runtime_self_test() {
     domain = lease.space->isolation_domain();
     code_allocated = memory::physical::allocate_page(
         code_page, memory::physical::PageOwner::user_image, memory::physical::Zone::any, domain);
-    stack_allocated = memory::physical::allocate_page(
-        stack_page, memory::physical::PageOwner::user_stack, memory::physical::Zone::any, domain);
     request_allocated = memory::physical::allocate_page(
         request_page, memory::physical::PageOwner::user_data, memory::physical::Zone::any, domain);
     response_allocated = memory::physical::allocate_page(
         response_page, memory::physical::PageOwner::user_data, memory::physical::Zone::any, domain);
-    if (!code_allocated || !stack_allocated || !request_allocated || !response_allocated) {
+    if (!code_allocated || !request_allocated || !response_allocated) {
         last_failure = 103;
         goto cleanup;
     }
@@ -548,19 +552,25 @@ bool runtime_self_test() {
     code_mapped = memory::virtual_memory::map(
         *lease.space, kUserCode, code_page,
         memory::virtual_memory::MapFlags::user | memory::virtual_memory::MapFlags::execute);
-    stack_mapped = memory::virtual_memory::map(
-        *lease.space, kUserStackBase, stack_page,
-        memory::virtual_memory::MapFlags::user | memory::virtual_memory::MapFlags::write);
     request_mapped = memory::virtual_memory::map(
         *lease.space, kUserRequest, request_page,
         memory::virtual_memory::MapFlags::user | memory::virtual_memory::MapFlags::write);
     response_mapped = memory::virtual_memory::map(
         *lease.space, kUserResponse, response_page,
         memory::virtual_memory::MapFlags::user | memory::virtual_memory::MapFlags::write);
-    if (!code_mapped || !stack_mapped || !request_mapped || !response_mapped) {
+    if (!code_mapped || !request_mapped || !response_mapped) {
         last_failure = 106;
         goto cleanup;
     }
+    thread_created = thread::user::create(manager, child.control, kUserCode, user_thread);
+    execution_acquired =
+        thread_created && thread::user::acquire_execution(manager, user_thread.control, execution);
+    if (!execution_acquired || !thread::user::validate_execution_lease(execution) ||
+        execution.address_space == nullptr || execution.address_space->space != lease.space) {
+        last_failure = 106;
+        goto cleanup;
+    }
+    user_stack_pointer = execution.context.rsp;
     {
         syscall::Request request{};
         request.abi_version = syscall::kAbiVersion;
@@ -579,7 +589,7 @@ bool runtime_self_test() {
         last_failure = 108;
         goto cleanup;
     }
-    if (!scheduler::bind_user_context(lease, context_binding) ||
+    if (!scheduler::bind_user_context(execution, context_binding) ||
         read_msr(kMsrKernelGsBase) != 0) {
         last_failure = 108;
         goto cleanup;
@@ -595,7 +605,7 @@ bool runtime_self_test() {
     write_msr(kMsrEfer, old_efer | kEferSyscallEnable);
     msrs_installed = true;
 
-    doxxer_enter_runtime_ring3_probe(lease.space->root_physical(), kUserCode,
+    doxxer_enter_runtime_ring3_probe(lease.space->root_physical(), execution.context.rip,
                                      user_stack_pointer);
 
     write_msr(kMsrStar, old_star);
@@ -609,8 +619,7 @@ bool runtime_self_test() {
         runtime_user_exceptions != 1 ||
         runtime_user_fault_rip != kUserCode + kRuntimeUserFaultOffset ||
         runtime_user_fault_rsp != runtime_first_rsp ||
-        runtime_first_rsp < kUserStackBase ||
-        runtime_first_rsp >= kUserStackBase + memory::physical::kPageSize ||
+        runtime_first_rsp != user_stack_pointer ||
         (runtime_first_rflags & kMaskedUserFlags) != 0 ||
         !memory::user_copy::copy_from_user(*lease.space, &response, kUserResponse,
                                            sizeof(response)) ||
@@ -630,6 +639,16 @@ cleanup:
         last_failure == 0) {
         last_failure = 110;
     }
+    if (execution_acquired && !context_binding.active &&
+        !thread::user::release_execution(execution) && last_failure == 0) {
+        last_failure = 110;
+    }
+    if (thread_created && !execution.active &&
+        (!thread::user::terminate(manager, user_thread.control, 0) ||
+         !thread::user::destroy(manager, user_thread.control)) &&
+        last_failure == 0) {
+        last_failure = 110;
+    }
     if (response_mapped && !memory::virtual_memory::unmap(*lease.space, kUserResponse) &&
         last_failure == 0) {
         last_failure = 111;
@@ -637,10 +656,6 @@ cleanup:
     if (request_mapped && !memory::virtual_memory::unmap(*lease.space, kUserRequest) &&
         last_failure == 0) {
         last_failure = 112;
-    }
-    if (stack_mapped && !memory::virtual_memory::unmap(*lease.space, kUserStackBase) &&
-        last_failure == 0) {
-        last_failure = 113;
     }
     if (code_mapped && !memory::virtual_memory::unmap(*lease.space, kUserCode) &&
         last_failure == 0) {
@@ -657,12 +672,6 @@ cleanup:
                                      domain) &&
         last_failure == 0) {
         last_failure = 116;
-    }
-    if (stack_allocated &&
-        !memory::physical::free_page(stack_page, memory::physical::PageOwner::user_stack,
-                                     domain) &&
-        last_failure == 0) {
-        last_failure = 117;
     }
     if (code_allocated &&
         !memory::physical::free_page(code_page, memory::physical::PageOwner::user_image,

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <doxxer/process/process.hpp>
+#include <doxxer/thread/user_thread.hpp>
 #include <doxxer/types.hpp>
 
 namespace doxxer::scheduler {
@@ -12,7 +12,7 @@ struct TaskHandle {
 };
 
 struct UserContextBinding {
-    process::AddressSpaceLease* context;
+    thread::user::ExecutionLease* execution;
     u32 cpu;
     u32 generation;
     bool active;
@@ -32,7 +32,7 @@ bool submit(TaskEntry entry, void* argument, TaskHandle& handle);
 bool completed(TaskHandle handle);
 bool release(TaskHandle handle);
 bool pump_one();
-bool bind_user_context(process::AddressSpaceLease& context, UserContextBinding& binding);
+bool bind_user_context(thread::user::ExecutionLease& execution, UserContextBinding& binding);
 bool unbind_user_context(UserContextBinding& binding);
 bool self_test();
 Statistics statistics();

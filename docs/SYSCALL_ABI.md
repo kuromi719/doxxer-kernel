@@ -40,8 +40,9 @@ startup, a deadline-bounded rendezvous installs and reads back the runtime sysca
 online CPU. A second two-call probe exercises `SWAPGS`, a CPU-local guarded syscall stack, process
 binding, canonical/mapping/flag return validation, and an actual fixed-selector `IRETQ` return to
 user code. The probe also resumes from a validated user-origin invalid-opcode exception through a
-`SWAPGS`-safe interrupt entry before making its second syscall. Its process binding is owned by the
-scheduler and accepts only a validated live address-space lease. Binding is single-owner per CPU,
+`SWAPGS`-safe interrupt entry before making its second syscall. Its binding is owned by the
+scheduler and accepts only an execute-authorized, exclusive user-thread execution lease whose
+process address space remains pinned. Binding is single-owner per CPU,
 requires interrupts disabled, and is released by a same-CPU generation-tagged handle; duplicate
 and forged-generation operations are rejected. Persistent user-thread dispatch and general process
 fault termination remain required before allowing arbitrary long-lived ring-3 callers.

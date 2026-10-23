@@ -60,7 +60,7 @@ struct ProbeContext {
 
 struct CpuUserBinding {
     sync::SpinLock lock;
-    process::AddressSpaceLease* context;
+    thread::user::ExecutionLease* execution;
     u32 generation = 1;
 };
 
@@ -324,10 +324,12 @@ bool release(TaskHandle handle) {
 
 bool pump_one() { return run_one(arch::x86_64::smp::current_index()); }
 
-bool bind_user_context(process::AddressSpaceLease& context, UserContextBinding& binding) {
+bool bind_user_context(thread::user::ExecutionLease& execution, UserContextBinding& binding) {
     binding = {};
     const u32 cpu = arch::x86_64::smp::current_index();
-    if (!initialized || !process::validate_address_space_lease(context) ||
+    if (!initialized || !thread::user::validate_execution_lease(execution) ||
+        execution.address_space == nullptr ||
+        !process::validate_address_space_lease(*execution.address_space) ||
         arch::x86_64::interrupts::enabled() ||
         cpu >= arch::x86_64::smp::processor_count()) {
         __atomic_add_fetch(&user_context_rejections, 1ULL, __ATOMIC_RELAXED);
@@ -335,14 +337,14 @@ bool bind_user_context(process::AddressSpaceLease& context, UserContextBinding& 
     }
     CpuUserBinding& state = user_bindings[cpu];
     sync::LockGuard guard(state.lock);
-    if (state.context != nullptr || arch::x86_64::smp::current_syscall_context() != nullptr ||
-        !arch::x86_64::smp::bind_syscall_context(&context)) {
+    if (state.execution != nullptr || arch::x86_64::smp::current_syscall_context() != nullptr ||
+        !arch::x86_64::smp::bind_syscall_context(&execution)) {
         __atomic_add_fetch(&user_context_rejections, 1ULL, __ATOMIC_RELAXED);
         return false;
     }
-    state.context = &context;
+    state.execution = &execution;
     binding = {
-        .context = &context,
+        .execution = &execution,
         .cpu = cpu,
         .generation = state.generation,
         .active = true,
@@ -353,7 +355,7 @@ bool bind_user_context(process::AddressSpaceLease& context, UserContextBinding& 
 
 bool unbind_user_context(UserContextBinding& binding) {
     const u32 cpu = arch::x86_64::smp::current_index();
-    if (!initialized || !binding.active || binding.context == nullptr ||
+    if (!initialized || !binding.active || binding.execution == nullptr ||
         arch::x86_64::interrupts::enabled() || cpu != binding.cpu ||
         cpu >= arch::x86_64::smp::processor_count()) {
         __atomic_add_fetch(&user_context_rejections, 1ULL, __ATOMIC_RELAXED);
@@ -361,13 +363,14 @@ bool unbind_user_context(UserContextBinding& binding) {
     }
     CpuUserBinding& state = user_bindings[cpu];
     sync::LockGuard guard(state.lock);
-    if (state.context != binding.context || state.generation != binding.generation ||
-        arch::x86_64::smp::current_syscall_context() != binding.context ||
-        !arch::x86_64::smp::unbind_syscall_context(binding.context)) {
+    if (state.execution != binding.execution || state.generation != binding.generation ||
+        arch::x86_64::smp::current_syscall_context() != binding.execution ||
+        !thread::user::validate_execution_lease(*binding.execution) ||
+        !arch::x86_64::smp::unbind_syscall_context(binding.execution)) {
         __atomic_add_fetch(&user_context_rejections, 1ULL, __ATOMIC_RELAXED);
         return false;
     }
-    state.context = nullptr;
+    state.execution = nullptr;
     ++state.generation;
     if (state.generation == 0) {
         ++state.generation;
@@ -454,20 +457,39 @@ bool self_test() {
     security::capability::DomainHandle binding_manager{};
     process::CreateResult binding_process{};
     process::AddressSpaceLease context_probe{};
+    thread::user::CreateResult binding_thread{};
+    thread::user::ExecutionLease execution{};
     UserContextBinding binding{};
     UserContextBinding duplicate{};
+    u64 code_page = 0;
+    constexpr u64 kBindingEntry = 0x4A'0000ULL;
     if (!security::capability::create_domain(binding_manager) ||
         !process::create(binding_manager, "scheduler-binding", binding_process) ||
         !process::acquire_address_space(binding_manager, binding_process.control, context_probe) ||
-        !bind_user_context(context_probe, binding) ||
-        arch::x86_64::smp::current_syscall_context() != &context_probe ||
-        bind_user_context(context_probe, duplicate)) {
+        !memory::physical::allocate_page(
+            code_page, memory::physical::PageOwner::user_image, memory::physical::Zone::any,
+            context_probe.space->isolation_domain()) ||
+        !memory::virtual_memory::map(*context_probe.space, kBindingEntry, code_page,
+                                     memory::virtual_memory::MapFlags::user |
+                                         memory::virtual_memory::MapFlags::execute) ||
+        !thread::user::create(binding_manager, binding_process.control, kBindingEntry,
+                              binding_thread) ||
+        !thread::user::acquire_execution(binding_manager, binding_thread.control, execution) ||
+        !bind_user_context(execution, binding) ||
+        arch::x86_64::smp::current_syscall_context() != &execution ||
+        bind_user_context(execution, duplicate)) {
         return false;
     }
     UserContextBinding forged = binding;
     ++forged.generation;
     if (unbind_user_context(forged) || !unbind_user_context(binding) || binding.active ||
-        arch::x86_64::smp::current_syscall_context() != nullptr) {
+        arch::x86_64::smp::current_syscall_context() != nullptr ||
+        !thread::user::release_execution(execution) ||
+        !thread::user::terminate(binding_manager, binding_thread.control, 0) ||
+        !thread::user::destroy(binding_manager, binding_thread.control) ||
+        !memory::virtual_memory::unmap(*context_probe.space, kBindingEntry) ||
+        !memory::physical::free_page(code_page, memory::physical::PageOwner::user_image,
+                                     context_probe.space->isolation_domain())) {
         return false;
     }
     process::release_address_space(context_probe);

@@ -19,6 +19,7 @@ struct Thread {
     bool active = false;
     bool destroying = false;
     u32 generation = 1;
+    u32 execution_users = 0;
     u64 identifier = 0;
     State state = State::ready;
     u32 exit_code = 0;
@@ -37,6 +38,8 @@ bool initialized = false;
 u64 next_identifier = 1;
 u64 created_threads = 0;
 u64 destroyed_threads = 0;
+u64 executions_started = 0;
+u64 executions_completed = 0;
 u64 rejected_operations = 0;
 u32 last_failure = 0;
 
@@ -45,6 +48,14 @@ void reject() { __atomic_add_fetch(&rejected_operations, 1ULL, __ATOMIC_RELAXED)
 u32 next_generation(u32 generation) {
     ++generation;
     return generation == 0 ? 1 : generation;
+}
+
+bool same_context(const Context& left, const Context& right) {
+    return left.r15 == right.r15 && left.r14 == right.r14 && left.r13 == right.r13 &&
+           left.r12 == right.r12 && left.rbp == right.rbp && left.rbx == right.rbx &&
+           left.rip == right.rip && left.rsp == right.rsp && left.rflags == right.rflags &&
+           left.fs_base == right.fs_base && left.code_selector == right.code_selector &&
+           left.stack_selector == right.stack_selector;
 }
 
 Thread* acquire_thread(security::capability::DomainHandle manager,
@@ -174,7 +185,8 @@ bool create(security::capability::DomainHandle manager,
         }
         const auto control_rights = security::capability::Right::inspect |
                                     security::capability::Right::administer |
-                                    security::capability::Right::derive;
+                                    security::capability::Right::derive |
+                                    security::capability::Right::execute;
         if (!security::capability::grant(manager, thread.object, control_rights,
                                          result.control)) {
             (void)security::capability::unregister_object(thread.object);
@@ -200,6 +212,7 @@ bool create(security::capability::DomainHandle manager,
             .stack_selector = kUserDataSelector,
         };
         thread.destroying = false;
+        thread.execution_users = 0;
         thread.active = true;
         result.handle = {.slot = slot, .generation = thread.generation};
         __atomic_add_fetch(&created_threads, 1ULL, __ATOMIC_RELAXED);
@@ -232,6 +245,87 @@ bool inspect(security::capability::DomainHandle manager,
         };
     }
     security::capability::release(lease);
+    return true;
+}
+
+bool acquire_execution(security::capability::DomainHandle manager,
+                       security::capability::Token thread_control, ExecutionLease& lease) {
+    lease = {};
+    security::capability::Lease capability_lease{};
+    Thread* thread = acquire_thread(
+        manager, thread_control,
+        security::capability::rights(security::capability::Right::execute), capability_lease);
+    if (thread == nullptr) {
+        return false;
+    }
+    bool success = false;
+    {
+        sync::LockGuard guard(thread->lock);
+        if (thread->state == State::ready && thread->execution_users == 0 &&
+            process::validate_address_space_lease(thread->process_space)) {
+            thread->state = State::running;
+            thread->execution_users = 1;
+            lease = {
+                .address_space = &thread->process_space,
+                .thread_cookie = thread,
+                .context = thread->context,
+                .identifier = thread->identifier,
+                .generation = thread->generation,
+                .active = true,
+            };
+            success = true;
+        }
+    }
+    security::capability::release(capability_lease);
+    if (!success) {
+        reject();
+        return false;
+    }
+    __atomic_add_fetch(&executions_started, 1ULL, __ATOMIC_RELAXED);
+    return true;
+}
+
+bool validate_execution_lease(const ExecutionLease& lease) {
+    if (!lease.active || lease.thread_cookie == nullptr || lease.address_space == nullptr ||
+        lease.identifier == 0 || lease.generation == 0) {
+        return false;
+    }
+    auto* thread = static_cast<Thread*>(lease.thread_cookie);
+    sync::LockGuard guard(thread->lock);
+    return thread->active && !thread->destroying && thread->state == State::running &&
+           thread->execution_users == 1 && thread->identifier == lease.identifier &&
+           thread->generation == lease.generation &&
+           &thread->process_space == lease.address_space &&
+           thread->process_space.active && thread->process_space.space != nullptr &&
+           same_context(thread->context, lease.context);
+}
+
+bool release_execution(ExecutionLease& lease) {
+    if (!lease.active || lease.thread_cookie == nullptr || lease.address_space == nullptr) {
+        reject();
+        return false;
+    }
+    auto* thread = static_cast<Thread*>(lease.thread_cookie);
+    bool success = false;
+    {
+        sync::LockGuard guard(thread->lock);
+        if (thread->active && !thread->destroying && thread->state == State::running &&
+            thread->execution_users == 1 && thread->identifier == lease.identifier &&
+            thread->generation == lease.generation &&
+            &thread->process_space == lease.address_space &&
+            thread->process_space.active && thread->process_space.space != nullptr &&
+            same_context(thread->context, lease.context)) {
+            thread->execution_users = 0;
+            thread->state = State::ready;
+            success = true;
+        }
+    }
+    if (!success) {
+        reject();
+        return false;
+    }
+    lease = {};
+    __atomic_add_fetch(&executions_completed, 1ULL, __ATOMIC_RELAXED);
     return true;
 }
 
@@ -273,7 +367,7 @@ bool destroy(security::capability::DomainHandle manager,
     bool destroyable = false;
     {
         sync::LockGuard guard(thread->lock);
-        if (thread->state == State::exited) {
+        if (thread->state == State::exited && thread->execution_users == 0) {
             thread->destroying = true;
             object = thread->object;
             destroyable = true;
@@ -296,6 +390,7 @@ bool destroy(security::capability::DomainHandle manager,
         thread->generation = next_generation(thread->generation);
         thread->identifier = 0;
         thread->state = State::ready;
+        thread->execution_users = 0;
         thread->exit_code = 0;
         thread->context = {};
         thread->stack_guard = 0;
@@ -317,6 +412,7 @@ bool self_test() {
     process::CreateResult child{};
     process::AddressSpaceLease process_space{};
     CreateResult thread{};
+    security::capability::Token observer{};
     Info info{};
     u64 code_page = 0;
     constexpr u64 kEntry = 0x50'0000ULL;
@@ -350,9 +446,35 @@ bool self_test() {
         return false;
     }
     process::release_address_space(process_space);
-    if (!process::terminate(manager, child.control, 91) ||
-        process::destroy(manager, child.control)) {
-        last_failure = 3;
+    ExecutionLease execution{};
+    ExecutionLease duplicate{};
+    if (!security::capability::derive(
+            manager, thread.control,
+            security::capability::rights(security::capability::Right::inspect), observer) ||
+        acquire_execution(manager, observer, duplicate) ||
+        !acquire_execution(manager, thread.control, execution) ||
+        !validate_execution_lease(execution) ||
+        acquire_execution(manager, thread.control, duplicate) ||
+        !inspect(manager, thread.control, info) || info.state != State::running) {
+        last_failure = 4;
+        return false;
+    }
+    ExecutionLease forged = execution;
+    ++forged.generation;
+    ExecutionLease forged_context = execution;
+    forged_context.context.rip ^= 1;
+    if (release_execution(forged) || validate_execution_lease(forged_context) ||
+        release_execution(forged_context) || !validate_execution_lease(execution) ||
+        !release_execution(execution) || execution.active ||
+        !inspect(manager, thread.control, info) || info.state != State::ready) {
+        last_failure = 4;
+        return false;
+    }
+    if (!acquire_execution(manager, thread.control, execution) ||
+        !process::terminate(manager, child.control, 91) ||
+        process::destroy(manager, child.control) ||
+        !validate_execution_lease(execution) || !release_execution(execution)) {
+        last_failure = 4;
         return false;
     }
     if (!terminate(manager, thread.control, 37) || !destroy(manager, thread.control) ||
@@ -375,13 +497,17 @@ bool self_test() {
 Statistics statistics() {
     Statistics result{
         .active_threads = 0,
+        .active_executions = 0,
         .created_threads = __atomic_load_n(&created_threads, __ATOMIC_RELAXED),
         .destroyed_threads = __atomic_load_n(&destroyed_threads, __ATOMIC_RELAXED),
+        .executions_started = __atomic_load_n(&executions_started, __ATOMIC_RELAXED),
+        .executions_completed = __atomic_load_n(&executions_completed, __ATOMIC_RELAXED),
         .rejected_operations = __atomic_load_n(&rejected_operations, __ATOMIC_RELAXED),
     };
     for (auto& thread : threads) {
         sync::LockGuard guard(thread.lock);
         result.active_threads += thread.active ? 1U : 0U;
+        result.active_executions += thread.execution_users;
     }
     return result;
 }

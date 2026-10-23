@@ -26,6 +26,7 @@ enum class Right : u32 {
     derive = 1U << 6U,
     transfer = 1U << 7U,
     administer = 1U << 8U,
+    execute = 1U << 9U,
 };
 
 using Rights = u32;

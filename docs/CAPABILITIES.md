@@ -20,7 +20,9 @@ The tag is a kernel hardening mechanism, not a network cryptographic primitive. 
 
 ## Rights and attenuation
 
-Defined rights are `inspect`, `read`, `write`, `signal`, `wait`, `map`, `derive`, `transfer`, and `administer`. Unknown or empty right sets are rejected.
+Defined rights are `inspect`, `read`, `write`, `signal`, `wait`, `map`, `derive`, `transfer`,
+`administer`, and `execute`. Unknown or empty right sets are rejected. User-thread dispatch requires
+`execute` independently of inspection and lifecycle administration.
 
 A trusted kernel subsystem may grant a root capability. Derivation requires the parent's `derive` right and can only preserve or remove existing rights. It cannot change the referenced object or type. Derivation ancestry is bounded, preventing malicious cycles or unbounded validation work.
 

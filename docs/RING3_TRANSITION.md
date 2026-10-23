@@ -32,17 +32,19 @@ the boot CPU. It exposes only a fixed `abi_info` request from fixed probe code, 
 arbitrary applications, and does not constitute a scheduler.
 
 Dedicated per-CPU guarded syscall stacks are provisioned during SMP startup and verified on every
-processor. After SMP startup a second hardware probe asks the scheduler to bind a validated live
-process lease into the BSP's CPU-local state, enters user mode with an empty user GS base, and
-executes the production-style
+processor. After SMP startup a second hardware probe creates a normal guarded user-thread object,
+acquires its execute-right-gated lease, and asks the scheduler to bind that lease into the BSP's
+CPU-local state. It consumes the thread's own entry RIP and stack RSP, enters user mode with an
+empty user GS base, and executes the production-style
 `SWAPGS` entry, switches immediately to the guarded syscall stack, validates user RIP/RSP/RFLAGS,
 dispatches through the process copy gateway, and returns through a fixed-selector `IRETQ` frame.
 User code then performs a second syscall, proving that the return path really resumed CPL3.
 
 Between the two syscalls the probe executes `UD2`. The common interrupt entry detects the saved
 CPL3 selector and performs `SWAPGS` before C++ dispatch touches CPU-local state. The registered
-policy validates the bound process lease, selector pair, instruction and stack mappings, RFLAGS,
-and exact fault RIP before skipping the fixed two-byte probe instruction. A matching `SWAPGS`
+policy validates the bound thread execution lease, its pinned process space, selector pair,
+instruction and stack mappings, RFLAGS, and exact fault RIP before skipping the fixed two-byte
+probe instruction. A matching `SWAPGS`
 before `IRETQ` restores the empty user GS base, and the second syscall proves user execution
 resumed after exception delivery.
 
@@ -51,7 +53,7 @@ canonical state, forbidden privilege flags, a missing CPU-local process binding,
 executable/stack mapping fail closed before return. The boot probe restores all modified MSRs and
 requires exact page/reference accounting. A serialized rendezvous installs and reads back the
 production `EFER.SCE`, `STAR`, `LSTAR`, and `FMASK` state on every online processor before this
-probe runs. Remaining runtime work includes persistent user-thread dispatch, general process fault
+probe runs. Remaining runtime work includes resumable persistent user-thread dispatch, general process fault
 termination/notification, and preemption rules. The current scheduler binding is intentionally
 non-migratable: interrupts must remain disabled while it is active, only one context may be
 installed per CPU, and teardown requires the original same-CPU generation-tagged handle.

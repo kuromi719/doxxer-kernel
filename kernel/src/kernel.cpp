@@ -356,6 +356,17 @@ namespace {
     log::success("SWAPGS SYSCALL ENTRY ONLINE");
     log::success("VALIDATED IRETQ USER RETURN VERIFIED");
     log::success("USER EXCEPTION DELIVERY VERIFIED");
+    const thread::user::Statistics dispatch_stats = thread::user::statistics();
+    if (dispatch_stats.active_threads != 0 || dispatch_stats.active_executions != 0 ||
+        dispatch_stats.executions_started != dispatch_stats.executions_completed) {
+        panic("USER THREAD EXECUTION LEASE LEAK DETECTED");
+    }
+    log::write("[INFO] USER THREAD EXECUTIONS: ");
+    log::write_decimal(dispatch_stats.executions_completed);
+    log::write(" COMPLETED / ");
+    log::write_decimal(dispatch_stats.active_executions);
+    log::write(" ACTIVE\n");
+    log::success("CAPABILITY-BOUND USER THREAD DISPATCH VERIFIED");
     if (!arch::x86_64::apic::timer_self_test()) {
         log::write("[ERROR] APIC TIMER FAILURE STAGE: ");
         log::write_decimal(arch::x86_64::apic::failure_code());
