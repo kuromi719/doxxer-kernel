@@ -118,7 +118,8 @@ manually. The live VM can be controlled independently:
 
 The boot trace presents actual kernel initialization results. An active check
 is yellow `PROGRESS`, a verified 100% check is green `PASSED`, and a failed
-check is red `FAIL`. A failure never advances to the logo: F5 reboots
+check is red `FAIL`. F5 restarts the VM during the trace, success hold, logo,
+and final idle state. A failure never advances to the logo: F5 reboots
 immediately and a 60-second watchdog reboots automatically. After every check
 reaches 100%, the trace remains visible for five seconds, followed by the
 Doxxer logo for thirty seconds.

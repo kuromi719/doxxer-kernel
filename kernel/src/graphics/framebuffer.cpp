@@ -224,8 +224,10 @@ void render_footer() {
               14U * scale + 7U * scale, color(12, 2, 24));
     hline(left, y - 14U * scale, active->width - left * 2U, color(188, 60, 255));
     u32 passed = 0;
+    bool failed = false;
     for (u8 i = 0; i < static_cast<u8>(BootStage::Count); ++i)
         if (stages[i].state == StageState::Passed) ++passed;
+        else if (stages[i].state == StageState::Failed) failed = true;
     draw_text_at("> VERIFIED CHECKS", left, y, scale, color(0, 255, 153));
     const u64 counter_x = left + text_width("> VERIFIED CHECKS  ", scale);
     draw_number(passed, counter_x, y, scale, color(229, 213, 239));
@@ -234,9 +236,9 @@ void render_footer() {
     draw_number(static_cast<u8>(BootStage::Count), counter_x + 6U * font_view(scale).width,
                  y, scale,
                  color(229, 213, 239));
-    const char* failure = "FAILURE: F5 TO REBOOT";
-    draw_text_at(failure, active->width - left - text_width(failure, scale), y, scale,
-                 color(255, 56, 110));
+    const char* action = failed ? "FAILURE: F5 TO REBOOT" : "F5 RESTART";
+    draw_text_at(action, active->width - left - text_width(action, scale), y, scale,
+                 failed ? color(255, 56, 110) : color(229, 213, 239));
 }
 }
 
@@ -304,15 +306,25 @@ void draw_boot_logo() {
     draw_frame();
     const u32 purple = color(190, 60, 255);
     const u32 deep_purple = color(116, 36, 224);
+    const u32 bright_purple = color(226, 120, 255);
     const u32 pale = color(238, 221, 247);
     const u64 emblem_x = (active->width - kEmblemWidth) / 2U;
     const u64 emblem_y = active->height / 8U;
-    draw_mask(kEmblemAlpha, kEmblemWidth, kEmblemHeight,
+    draw_mask(kEmblemOuterAlpha, kEmblemWidth, kEmblemHeight,
+              emblem_x, emblem_y, bright_purple);
+    draw_mask(kEmblemInnerAlpha, kEmblemWidth, kEmblemHeight,
+              emblem_x, emblem_y, deep_purple);
+    draw_mask(kEmblemDAlpha, kEmblemWidth, kEmblemHeight,
               emblem_x, emblem_y, purple);
 
     auto logo_text_width = [](const char* text) -> u64 {
-        u64 length = 0; while (text[length] != '\0') ++length;
-        return length * kLogoFontWidth;
+        u64 width = 0;
+        while (*text != '\0') {
+            char value = *text++;
+            if (value < ' ' || value > '_') value = '?';
+            width += kLogoAdvance[static_cast<u8>(value) - static_cast<u8>(' ')];
+        }
+        return width;
     };
     auto draw_logo_text = [&](const char* text, u64 x, u64 y, u32 ink) {
         while (*text != '\0') {
@@ -321,7 +333,7 @@ void draw_boot_logo() {
             const u64 index = static_cast<u8>(value) - static_cast<u8>(' ');
             draw_mask(kLogoFontAlpha + index * kLogoFontWidth * kLogoFontHeight,
                       kLogoFontWidth, kLogoFontHeight, x, y, ink);
-            x += kLogoFontWidth;
+            x += kLogoAdvance[index];
         }
     };
     constexpr u64 gap = 18U;

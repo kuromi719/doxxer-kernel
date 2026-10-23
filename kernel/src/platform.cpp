@@ -35,13 +35,59 @@ u64 tsc_hz() {
     // frequency leaves are hidden and intentionally errs toward a longer wait.
     return 1'000'000'000ULL;
 }
+
+bool f5_pressed() {
+    if ((arch::x86_64::in8(0x64) & 0x01U) == 0) return false;
+    const u8 scan_code = arch::x86_64::in8(0x60);
+    // Firmware may leave the 8042 translation bit either enabled (Set 1) or
+    // disabled (native Set 2), so accept the F5 make code from both sets.
+    return scan_code == 0x3FU || scan_code == 0x03U;
+}
+}
+
+bool initialize_restart_hotkey() {
+    auto wait_input = []() -> bool {
+        for (u32 spin = 0; spin < 100'000U; ++spin) {
+            if ((arch::x86_64::in8(0x64) & 0x02U) == 0) return true;
+            asm volatile("pause");
+        }
+        return false;
+    };
+    auto wait_output = []() -> bool {
+        for (u32 spin = 0; spin < 100'000U; ++spin) {
+            if ((arch::x86_64::in8(0x64) & 0x01U) != 0) return true;
+            asm volatile("pause");
+        }
+        return false;
+    };
+    if (!wait_input()) return false;
+    arch::x86_64::out8(0x64, 0xAD); // Disable port while programming.
+    while ((arch::x86_64::in8(0x64) & 0x01U) != 0) (void)arch::x86_64::in8(0x60);
+    if (!wait_input()) return false;
+    arch::x86_64::out8(0x64, 0x20);
+    if (!wait_output()) return false;
+    u8 configuration = arch::x86_64::in8(0x60);
+    configuration = static_cast<u8>((configuration & ~0x11U) | 0x40U);
+    if (!wait_input()) return false;
+    arch::x86_64::out8(0x64, 0x60);
+    if (!wait_input()) return false;
+    arch::x86_64::out8(0x60, configuration);
+    if (!wait_input()) return false;
+    arch::x86_64::out8(0x64, 0xAE);
+    if (!wait_input()) return false;
+    arch::x86_64::out8(0x60, 0xF4); // Enable keyboard scanning.
+    if (!wait_output()) return false;
+    return arch::x86_64::in8(0x60) == 0xFAU;
 }
 
 void delay_milliseconds(unsigned milliseconds) {
     const u64 ticks_per_millisecond = tsc_hz() / 1000U;
     const u64 start = read_tsc();
     const u64 duration = ticks_per_millisecond * milliseconds;
-    while (read_tsc() - start < duration) asm volatile("pause");
+    while (read_tsc() - start < duration) {
+        if (f5_pressed()) reboot();
+        asm volatile("pause");
+    }
 }
 
 [[noreturn]] void reboot() {
@@ -63,14 +109,20 @@ void delay_milliseconds(unsigned milliseconds) {
         graphics::draw_failure_countdown(remaining);
         const u64 deadline = read_tsc() + tsc_hz();
         while (read_tsc() < deadline) {
-            if ((arch::x86_64::in8(0x64) & 0x01U) != 0) {
-                const u8 scan_code = arch::x86_64::in8(0x60);
-                if (scan_code == 0x3FU) reboot();
-            }
+            if (f5_pressed()) reboot();
             asm volatile("pause");
         }
     }
     reboot();
+}
+
+[[noreturn]] void wait_for_restart() {
+    for (;;) {
+        if (f5_pressed()) reboot();
+        // The calibrated local APIC timer wakes the BSP regularly, keeping the
+        // logo idle loop efficient while still polling the PS/2 restart key.
+        asm volatile("sti; hlt");
+    }
 }
 
 [[noreturn]] void halt() {

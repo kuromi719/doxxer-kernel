@@ -420,8 +420,10 @@ namespace {
     graphics::draw_boot_logo();
 #ifndef DOXXER_TEST_MODE
     platform::delay_milliseconds(30000);
-#endif
+    platform::wait_for_restart();
+#else
     platform::test_success();
+#endif
 }
 }
 
@@ -449,6 +451,10 @@ extern "C" [[noreturn]] void kernel_main() {
         panic("UNSUPPORTED FRAMEBUFFER");
     }
     graphics::draw_boot_trace();
+    if (!platform::initialize_restart_hotkey()) {
+        panic("F5 RESTART HOTKEY INITIALIZATION FAILED");
+    }
+    log::success("F5 RESTART HOTKEY ONLINE");
     graphics::stage_progress(graphics::BootStage::Framebuffer, 50);
     log::success("FRAMEBUFFER ONLINE");
     graphics::stage_pass(graphics::BootStage::Framebuffer);
