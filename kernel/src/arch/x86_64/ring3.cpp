@@ -2,12 +2,17 @@
 
 #include <doxxer/arch/x86_64/interrupts.hpp>
 #include <doxxer/arch/x86_64/smp.hpp>
+#include <doxxer/loader/elf64.hpp>
+#include <doxxer/log.hpp>
 #include <doxxer/memory/physical.hpp>
 #include <doxxer/memory/user_copy.hpp>
 #include <doxxer/memory/virtual.hpp>
 #include <doxxer/process/process.hpp>
+#include <doxxer/panic.hpp>
+#include <doxxer/platform.hpp>
 #include <doxxer/scheduler/scheduler.hpp>
 #include <doxxer/security/capability.hpp>
+#include <doxxer/security/image_policy.hpp>
 #include <doxxer/syscall/dispatcher.hpp>
 #include <doxxer/thread/user_thread.hpp>
 
@@ -19,6 +24,8 @@ extern "C" void doxxer_enter_runtime_ring3_probe(doxxer::u64 root_physical,
                                                    doxxer::u64 user_stack);
 extern "C" void doxxer_ring3_syscall_probe_entry();
 extern "C" void doxxer_runtime_syscall_entry();
+extern "C" const doxxer::u8 doxxer_desktop_program_start[];
+extern "C" const doxxer::u8 doxxer_desktop_program_end[];
 
 extern "C" {
 volatile doxxer::u64 doxxer_ring3_probe_active = 0;
@@ -64,6 +71,26 @@ constexpr usize kRuntimeUserFaultOffset = 27;
 constexpr usize kRuntimeSecondReturnOffset = 44;
 constexpr usize kSyscallOffset = 44;
 constexpr usize kAfterSyscallOffset = kSyscallOffset + 2;
+constexpr usize kDesktopImageSize = 0x2000;
+constexpr usize kDesktopCodeOffset = 0x1000;
+struct DesktopElfHeader {
+    u8 identity[16]; u16 type; u16 machine; u32 version; u64 entry;
+    u64 program_header_offset; u64 section_header_offset; u32 flags;
+    u16 header_size; u16 program_header_size; u16 program_header_count;
+    u16 section_header_size; u16 section_header_count; u16 section_name_index;
+};
+struct DesktopProgramHeader {
+    u32 type; u32 flags; u64 offset; u64 virtual_address;
+    u64 physical_address; u64 file_size; u64 memory_size; u64 alignment;
+};
+static_assert(sizeof(DesktopElfHeader) == 64 && sizeof(DesktopProgramHeader) == 56);
+alignas(8) u8 desktop_image[kDesktopImageSize]{};
+bool desktop_image_enrolled = false;
+bool desktop_session_active = false;
+bool desktop_session_started = false;
+void (*desktop_ready_callback)() = nullptr;
+process::AddressSpaceLease* desktop_session_lease = nullptr;
+u64 desktop_user_calls = 0;
 u32 last_failure = 0;
 process::AddressSpaceLease* active_probe_lease = nullptr;
 u64 runtime_probe_calls = 0;
@@ -75,6 +102,40 @@ u64 runtime_user_fault_rip = 0;
 u64 runtime_user_fault_rsp = 0;
 u32 runtime_cpu_installs = 0;
 bool runtime_initialized = false;
+
+u64 reject_runtime_entry(u32 code, u64 user_rip) {
+    log::write("[ERROR] USER SESSION DISPATCH REJECT CODE ");
+    log::write_decimal(code);
+    log::write(" RIP ");
+    log::write_hex(user_rip);
+    log::write("\n");
+    return kRuntimeProbeFatal;
+}
+
+bool prepare_desktop_image() {
+    const usize code_size = static_cast<usize>(doxxer_desktop_program_end -
+                                                doxxer_desktop_program_start);
+    if (code_size == 0 || code_size > memory::physical::kPageSize) return false;
+    auto* header = reinterpret_cast<DesktopElfHeader*>(desktop_image);
+    header->identity[0] = 0x7f; header->identity[1] = 'E';
+    header->identity[2] = 'L'; header->identity[3] = 'F';
+    header->identity[4] = 2; header->identity[5] = 1; header->identity[6] = 1;
+    header->type = 2; header->machine = 62; header->version = 1;
+    header->entry = kUserCode; header->program_header_offset = sizeof(*header);
+    header->header_size = sizeof(*header);
+    header->program_header_size = sizeof(DesktopProgramHeader);
+    header->program_header_count = 1;
+    auto* program = reinterpret_cast<DesktopProgramHeader*>(
+        desktop_image + sizeof(DesktopElfHeader));
+    *program = {.type = 1, .flags = 5, .offset = kDesktopCodeOffset,
+                .virtual_address = kUserCode, .physical_address = 0,
+                .file_size = code_size, .memory_size = code_size,
+                .alignment = memory::physical::kPageSize};
+    for (usize index = 0; index < code_size; ++index) {
+        desktop_image[kDesktopCodeOffset + index] = doxxer_desktop_program_start[index];
+    }
+    return true;
+}
 
 u64 read_msr(u32 index) {
     u32 low = 0;
@@ -193,13 +254,44 @@ extern "C" u64 doxxer_runtime_syscall_dispatch(void* context, u64 user_request,
                                                 u64 user_response, u64 user_rip,
                                                 u64 user_rsp, u64 user_rflags) {
     if (context == nullptr) {
-        return kRuntimeProbeFatal;
+        return reject_runtime_entry(1, user_rip);
     }
     auto& execution = *static_cast<thread::user::ExecutionLease*>(context);
     if (!thread::user::validate_execution_lease(execution) ||
         execution.address_space == nullptr ||
         !valid_runtime_return(*execution.address_space, user_rip, user_rsp, user_rflags)) {
-        return kRuntimeProbeFatal;
+        return reject_runtime_entry(2, user_rip);
+    }
+    if (desktop_session_active) {
+        if (desktop_session_lease == nullptr || execution.address_space == nullptr ||
+            desktop_session_lease->space != execution.address_space->space ||
+            user_request != kUserRequest || user_response != kUserResponse ||
+            user_rip != kUserCode + 22 || desktop_user_calls == static_cast<u64>(-1)) {
+            return reject_runtime_entry(3, user_rip);
+        }
+        const syscall::Status status = syscall::dispatch_user(*execution.address_space,
+                                                                user_request, user_response);
+        if (status != syscall::Status::ok) return reject_runtime_entry(4, user_rip);
+        ++desktop_user_calls;
+        if (desktop_user_calls == 16) {
+            log::line("DOXXER_USER_HEARTBEAT_16");
+        }
+        if (!desktop_session_started) {
+            syscall::Response response{};
+            if (!memory::user_copy::copy_from_user(*execution.address_space->space, &response,
+                                                    kUserResponse, sizeof(response)) ||
+                response.status != syscall::Status::ok ||
+                response.values[0] != syscall::kAbiVersion ||
+                response.values[1] != ipc::kMaximumPayloadSize ||
+                desktop_ready_callback == nullptr) {
+                return reject_runtime_entry(5, user_rip);
+            }
+            desktop_session_started = true;
+            log::line("DOXXER_USER_SESSION_STARTED");
+            desktop_ready_callback();
+        }
+        platform::poll_restart_hotkey();
+        return static_cast<u64>(status);
     }
     ++runtime_probe_calls;
     if (doxxer_runtime_probe_active == 1 && user_request == kRuntimeFinishRequest &&
@@ -215,6 +307,77 @@ extern "C" u64 doxxer_runtime_syscall_dispatch(void* context, u64 user_request,
     runtime_first_rflags = user_rflags;
     return static_cast<u64>(
         syscall::dispatch_user(*execution.address_space, user_request, user_response));
+}
+
+extern "C" [[noreturn]] void doxxer_runtime_syscall_panic() {
+    panic("USER SYSCALL BOUNDARY VIOLATION");
+}
+
+bool enroll_desktop_image() {
+    if (desktop_image_enrolled || !prepare_desktop_image() ||
+        !security::image_policy::enroll(desktop_image, sizeof(desktop_image))) {
+        return false;
+    }
+    desktop_image_enrolled = true;
+    return true;
+}
+
+[[noreturn]] void launch_desktop_session(void (*on_ready)()) {
+    // The current single-task ring-3 transition is cooperative. Stop the BSP
+    // APIC timer before binding a user context; preemption needs a scheduler
+    // that can save and restore complete user register/CR3 state.
+    arch::x86_64::interrupts::disable();
+    if (!runtime_initialized || !desktop_image_enrolled || !security::image_policy::is_sealed() ||
+        on_ready == nullptr || desktop_session_active ||
+        arch::x86_64::interrupts::enabled()) {
+        panic("USER SESSION PRECONDITION FAILED");
+    }
+    security::capability::DomainHandle manager{};
+    process::CreateResult child{};
+    process::AddressSpaceLease lease{};
+    loader::elf64::Image image{};
+    thread::user::CreateResult user_thread{};
+    thread::user::ExecutionLease execution{};
+    scheduler::UserContextBinding binding{};
+    u64 request_page = 0;
+    u64 response_page = 0;
+    if (!security::capability::create_domain(manager) ||
+        !process::create(manager, "doxxer-desktop", child) ||
+        !process::acquire_address_space(manager, child.control, lease) ||
+        !loader::elf64::load(*lease.space, desktop_image, sizeof(desktop_image), image)) {
+        panic("USER SESSION IMAGE LOAD FAILED");
+    }
+    const auto domain = lease.space->isolation_domain();
+    if (!memory::physical::allocate_page(request_page, memory::physical::PageOwner::user_data,
+                                         memory::physical::Zone::any, domain) ||
+        !memory::physical::allocate_page(response_page, memory::physical::PageOwner::user_data,
+                                         memory::physical::Zone::any, domain) ||
+        !memory::virtual_memory::map(*lease.space, kUserRequest, request_page,
+                                     memory::virtual_memory::MapFlags::user |
+                                         memory::virtual_memory::MapFlags::write) ||
+        !memory::virtual_memory::map(*lease.space, kUserResponse, response_page,
+                                     memory::virtual_memory::MapFlags::user |
+                                         memory::virtual_memory::MapFlags::write) ||
+        !thread::user::create(manager, child.control, image.entry_point, user_thread) ||
+        !thread::user::acquire_execution(manager, user_thread.control, execution)) {
+        panic("USER SESSION MEMORY OR THREAD FAILED");
+    }
+    syscall::Request request{};
+    request.abi_version = syscall::kAbiVersion;
+    request.number = syscall::Number::abi_info;
+    if (!memory::user_copy::copy_to_user(*lease.space, kUserRequest, &request,
+                                         sizeof(request)) ||
+        !scheduler::bind_user_context(execution, binding)) {
+        panic("USER SESSION ABI BIND FAILED");
+    }
+    desktop_ready_callback = on_ready;
+    desktop_session_lease = &lease;
+    desktop_session_started = false;
+    desktop_user_calls = 0;
+    desktop_session_active = true;
+    doxxer_enter_runtime_ring3_probe(lease.space->root_physical(), execution.context.rip,
+                                     execution.context.rsp);
+    panic("USER SESSION RETURNED WITHOUT EXIT");
 }
 
 bool self_test() {

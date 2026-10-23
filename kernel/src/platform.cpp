@@ -1,4 +1,5 @@
 #include <doxxer/arch/x86_64/io.hpp>
+#include <doxxer/arch/x86_64/apic.hpp>
 #include <doxxer/graphics/framebuffer.hpp>
 #include <doxxer/log.hpp>
 #include <doxxer/platform.hpp>
@@ -39,9 +40,9 @@ u64 tsc_hz() {
 bool f5_pressed() {
     if ((arch::x86_64::in8(0x64) & 0x01U) == 0) return false;
     const u8 scan_code = arch::x86_64::in8(0x60);
-    // Firmware may leave the 8042 translation bit either enabled (Set 1) or
-    // disabled (native Set 2), so accept the F5 make code from both sets.
-    return scan_code == 0x3FU || scan_code == 0x03U;
+    // initialize_restart_hotkey() explicitly enables 8042 Set-1 translation.
+    // 0x03 is the Set-1 '2' key, not F5; accepting it rebooted on that key.
+    return scan_code == 0x3FU;
 }
 }
 
@@ -80,12 +81,30 @@ bool initialize_restart_hotkey() {
     return arch::x86_64::in8(0x60) == 0xFAU;
 }
 
+void poll_restart_hotkey() {
+    if (f5_pressed()) reboot();
+}
+
 void delay_milliseconds(unsigned milliseconds) {
+    const u64 reference_ticks =
+        arch::x86_64::apic::reference_ticks_for_microseconds(
+            static_cast<u64>(milliseconds) * 1000U);
+    if (reference_ticks != 0) {
+        const u64 start = arch::x86_64::apic::reference_counter();
+        while (arch::x86_64::apic::reference_counter() - start < reference_ticks) {
+            poll_restart_hotkey();
+            asm volatile("pause");
+        }
+        return;
+    }
+    // Early boot precedes HPET discovery and must still be able to present
+    // diagnostics. After APIC initialization the hardware reference clock
+    // above is preferred over CPUID's sometimes inaccurate virtual TSC rate.
     const u64 ticks_per_millisecond = tsc_hz() / 1000U;
     const u64 start = read_tsc();
     const u64 duration = ticks_per_millisecond * milliseconds;
     while (read_tsc() - start < duration) {
-        if (f5_pressed()) reboot();
+        poll_restart_hotkey();
         asm volatile("pause");
     }
 }
@@ -107,11 +126,7 @@ void delay_milliseconds(unsigned milliseconds) {
     log::line("F5 TO REBOOT / AUTO RESTART IN 60");
     for (u32 remaining = 60; remaining > 0; --remaining) {
         graphics::draw_failure_countdown(remaining);
-        const u64 deadline = read_tsc() + tsc_hz();
-        while (read_tsc() < deadline) {
-            if (f5_pressed()) reboot();
-            asm volatile("pause");
-        }
+        delay_milliseconds(1000);
     }
     reboot();
 }

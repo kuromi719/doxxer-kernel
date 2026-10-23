@@ -23,6 +23,7 @@ void stage_fail(BootStage stage);
 void fail_active_stage();
 void draw_failure_countdown(u32 seconds_remaining);
 void draw_boot_logo();
+void draw_desktop_shell();
 void draw_boot_banner();
 void write_char(char value);
 void write(const char* text);

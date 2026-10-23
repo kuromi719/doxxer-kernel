@@ -1,5 +1,6 @@
 #include <doxxer/arch/x86_64/apic.hpp>
 #include <doxxer/arch/x86_64/hardening.hpp>
+#include <doxxer/arch/x86_64/interrupts.hpp>
 #include <doxxer/arch/x86_64/iommu.hpp>
 #include <doxxer/arch/x86_64/protection.hpp>
 #include <doxxer/arch/x86_64/ring3.hpp>
@@ -29,6 +30,11 @@
 #include <doxxer/thread/user_thread.hpp>
 
 namespace {
+[[maybe_unused]] void desktop_ready() {
+    doxxer::graphics::draw_desktop_shell();
+    doxxer::log::line("DOXXER_DESKTOP_READY");
+}
+
 [[noreturn]] void protected_kernel_main() {
     using namespace doxxer;
 
@@ -420,7 +426,8 @@ namespace {
     graphics::draw_boot_logo();
 #ifndef DOXXER_TEST_MODE
     platform::delay_milliseconds(30000);
-    platform::wait_for_restart();
+    arch::x86_64::interrupts::disable();
+    arch::x86_64::ring3::launch_desktop_session(desktop_ready);
 #else
     platform::test_success();
 #endif

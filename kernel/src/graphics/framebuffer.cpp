@@ -307,6 +307,68 @@ void draw_boot_logo() {
     }
 }
 
+void draw_desktop_shell() {
+    if (active == nullptr) return;
+    const u64 width = active->width, height = active->height;
+    const u32 background = color(9, 7, 18);
+    const u32 panel = color(22, 16, 35);
+    const u32 panel_edge = color(70, 48, 103);
+    const u32 accent = color(181, 79, 246);
+    const u32 text = color(239, 230, 249);
+    const u32 muted = color(169, 151, 187);
+    fill_rect(0, 0, width, height, background);
+    // This is a kernel-owned fallback surface, not an unverified claim that
+    // the planned user compositor, input stack, and window manager exist.
+    const u64 top_height = 52;
+    fill_rect(0, 0, width, top_height, panel);
+    hline(0, top_height - 1U, width, panel_edge);
+    fill_rect(22, 17, 14, 18, accent);
+    draw_text_at("DOXXER", 50, 17, 2, text);
+    if (width >= 900) {
+        draw_text_at("EARLY SESSION", width - 318, 17, 2, muted);
+        draw_text_at("F5 RESTART", width - 148, 17, 2, muted);
+    }
+
+    const u64 rail_x = 18, rail_y = top_height + 18;
+    const u64 rail_width = 64;
+    const u64 rail_height = height > 170 ? height - rail_y - 78 : 0;
+    fill_rect(rail_x, rail_y, rail_width, rail_height, panel);
+    hline(rail_x, rail_y, rail_width, panel_edge);
+    vline(rail_x, rail_y, rail_height, panel_edge);
+    for (u64 index = 0; index < 4; ++index) {
+        const u64 tile_y = rail_y + 18U + index * 58U;
+        if (tile_y + 40U > rail_y + rail_height) break;
+        fill_rect(rail_x + 12U, tile_y, 40U, 40U,
+                  index == 0 ? color(76, 35, 112) : color(34, 26, 51));
+        hline(rail_x + 23U, tile_y + 18U, 18U,
+              index == 0 ? accent : muted);
+    }
+
+    const u64 content_x = rail_x + rail_width + 22U;
+    const u64 content_width = width > content_x + 28U ? width - content_x - 28U : 0;
+    const u64 content_y = top_height + 44U;
+    draw_text_at("WELCOME TO DOXXER", content_x, content_y, 3, text);
+    draw_text_at("USER SESSION FOUNDATION", content_x,
+                 content_y + 52U, 2, muted);
+    const u64 card_y = content_y + 100U;
+    const u64 card_height = height > card_y + 110U ? height - card_y - 110U : 0;
+    fill_rect(content_x, card_y, content_width, card_height, panel);
+    hline(content_x, card_y, content_width, panel_edge);
+    vline(content_x, card_y, card_height, panel_edge);
+    fill_rect(content_x + 20U, card_y + 20U, 5U, 28U, accent);
+    draw_text_at("SESSION STATUS", content_x + 42U, card_y + 25U, 2, text);
+    draw_text_at("KERNEL SERVICES INITIALIZED", content_x + 24U,
+                 card_y + 82U, 2, muted);
+    draw_text_at("USER EXECUTION BOUNDARY ACTIVE", content_x + 24U,
+                 card_y + 117U, 2, muted);
+    draw_text_at("DESKTOP SERVICES UNDER DEVELOPMENT", content_x + 24U,
+                 card_y + 152U, 2, muted);
+    const u64 footer_y = height > 52U ? height - 52U : 0;
+    fill_rect(0, footer_y, width, 52U, panel);
+    hline(0, footer_y, width, panel_edge);
+    draw_text_at("DOXXER OS / PROTOTYPE SESSION", 24, footer_y + 16U, 2, muted);
+}
+
 void draw_boot_banner() { draw_boot_logo(); }
 void write_char(char value) {
     if (active == nullptr) return;

@@ -790,7 +790,11 @@ bool map_temporary_user(AddressSpace& owner_space, u64 physical_address, bool wr
                         if ((pte & kPresent) == 0) {
                             pte = physical_page |
                                   leaf_flags(writable ? MapFlags::write : MapFlags::none, false);
-                            invalidate_if_active(*active_space, virtual_address);
+                            // The temporary supervisor PT is shared with the
+                            // currently executing user CR3. The active_space
+                            // identity check is insufficient during a ring-3
+                            // syscall; invalidate this CPU's TLB unconditionally.
+                            asm volatile("invlpg (%0)" : : "r"(virtual_address) : "memory");
                             installed = true;
                         }
                     }
@@ -857,7 +861,10 @@ bool unmap_temporary_user(TemporaryMapping& mapping) {
                         if ((pte & (kPresent | kUser | kAddressMask)) ==
                             (kPresent | physical_page)) {
                             pte = 0;
-                            invalidate_if_active(*space, virtual_address);
+                            // This per-CPU slot may have been accessed while a
+                            // user CR3 was active. Flush before another page is
+                            // installed in the same virtual window.
+                            asm volatile("invlpg (%0)" : : "r"(virtual_address) : "memory");
                             prune_empty_path(*space, virtual_address);
                             removed = true;
                         }

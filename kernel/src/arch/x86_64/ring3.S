@@ -20,6 +20,7 @@
 .extern doxxer_runtime_probe_kernel_cr3
 .extern doxxer_runtime_probe_resume
 .extern doxxer_runtime_syscall_dispatch
+.extern doxxer_runtime_syscall_panic
 
 .equ DOXXER_CPU_SYSCALL_STACK_TOP, 136
 .equ DOXXER_CPU_SYSCALL_CONTEXT, 144
@@ -203,9 +204,41 @@ doxxer_runtime_syscall_entry:
     jmpq *%rax
 
 .Lruntime_syscall_fatal:
+    /* The user CR3 does not own all kernel supervisor windows. Panic and its
+       timer/graphics path must run on the saved kernel page table and stack. */
+    movq doxxer_runtime_probe_kernel_cr3(%rip), %rax
+    testq %rax, %rax
+    je .Lruntime_fatal_halt
+    movq %rax, %cr3
+    movq doxxer_runtime_probe_kernel_rsp(%rip), %rsp
+    testq %rsp, %rsp
+    je .Lruntime_fatal_halt
+    subq $8, %rsp
+    callq doxxer_runtime_syscall_panic
+.Lruntime_fatal_halt:
     cli
-2:
-    hlt
+2:  hlt
     jmp 2b
+
+/* Copied verbatim into the read/execute segment of the built-in user ELF.
+   All branches are intra-image; there are no kernel relocations or pointers. */
+.section .rodata.desktop_user,"a",@progbits
+.global doxxer_desktop_program_start
+.global doxxer_desktop_program_end
+doxxer_desktop_program_start:
+    movabsq $0x0000000000900000, %rdi
+    movabsq $0x0000000000910000, %rsi
+.Ldesktop_heartbeat:
+    syscall
+    testq %rax, %rax
+    jne .Ldesktop_bad_response
+    movl $0x00040000, %ecx
+.Ldesktop_pause:
+    pause
+    loop .Ldesktop_pause
+    jmp .Ldesktop_heartbeat
+.Ldesktop_bad_response:
+    ud2
+doxxer_desktop_program_end:
 
 .section .note.GNU-stack,"",@progbits

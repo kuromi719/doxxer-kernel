@@ -1,4 +1,5 @@
 #include <doxxer/loader/elf64.hpp>
+#include <doxxer/arch/x86_64/ring3.hpp>
 
 #include <doxxer/memory/heap.hpp>
 #include <doxxer/memory/physical.hpp>
@@ -385,7 +386,8 @@ bool self_test() {
         return false;
     }
     programs[0].flags = kFlagRead | kFlagExecute;
-    if (!security::image_policy::seal() || !security::image_policy::is_sealed() ||
+    if (!arch::x86_64::ring3::enroll_desktop_image() ||
+        !security::image_policy::seal() || !security::image_policy::is_sealed() ||
         security::image_policy::enroll(blob, sizeof(blob))) {
         last_failure = 9;
         return false;

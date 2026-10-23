@@ -51,6 +51,8 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Capability-owned user-thread contexts with pinned process spaces and guarded stacks
 - Execute-right-gated user-thread leases with exclusive ready/running lifecycle transitions
 - Hardware-verified CPL3 `IRETQ` entry and `SYSCALL` return-to-kernel boundary probe
+- An immutable, measured ring-3 heartbeat ELF launched after the 30-second logo hold
+- A kernel-rendered early-session desktop surface shown only after the first validated user syscall
 - Immutable supervisor stack windows shared into processes without user accessibility or ownership
 - Fail-closed Intel VT-d activation with an empty root table that denies all PCI DMA by default
 - Boot-keyed shadow page ledger with typed ownership, zero-on-transition, and user-map enforcement
@@ -65,8 +67,13 @@ Doxxer is an experimental privacy-first x86_64 operating-system kernel. This rep
 - Automated disk and ISO smoke tests
 - 128 MiB low-memory and 5 GiB high-memory QEMU coverage
 
-Persistent user-mode scheduling, arbitrary application dispatch, preemptive scheduling, networking,
-general drivers, Secure Boot, and physical-hardware support are intentionally deferred.
+The early-session surface is **not yet a user-owned DoxxerUI compositor**. The
+ring-3 task proves a persistent, isolated user ABI loop but does not own the
+framebuffer or handle input. Persistent multi-application scheduling,
+preemption, a general app launcher, storage and filesystem services, keyboard
+and pointer drivers beyond the F5 development hotkey, networking, Secure Boot,
+and physical-hardware support remain deferred. This is not a complete or
+production-secure operating system.
 
 ## Prerequisites
 
@@ -91,6 +98,27 @@ git submodule update --init --recursive
 .\tools\run.ps1 -Media iso
 .\tools\test.ps1
 ```
+
+`test.ps1` runs fast `TEST_MODE` boot smoke tests; that mode intentionally
+skips presentation delays. To independently exercise the production timing,
+native-size logo pixels, thirty-second logo-to-early-session transition, and F5 guest restart,
+build the normal disk image and run the separate headless QEMU integration test
+(Python 3.10+ and Pillow required):
+
+```powershell
+.\tools\build.ps1 -Target disk
+python tools/test-production-boot.py --media disk
+```
+
+The production test copies the image before launch and does not control the
+visible live VM. It checks the boot presentation and first fallback desktop
+frame only; it does not establish that a full compositor, filesystem, or
+complete operating system is available. Screenshots and serial diagnostics are
+saved under `build/test-logs/production-disk/` (or `production-iso/`).
+It also holds the early session for two seconds after its ready marker and
+rejects any panic; this specifically guards against a stale temporary-mapping
+TLB entry breaking the second or later user syscall. It is a runtime
+regression check, not a proof that all address-space transitions are safe.
 
 From an MSYS2 UCRT64 shell, the corresponding targets are:
 

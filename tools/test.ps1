@@ -49,6 +49,8 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
     $markers = @(
         'DOXXER_BOOT_START',
         '[OK] SERIAL ONLINE',
+        '[OK] F5 RESTART HOTKEY ONLINE',
+        '[OK] FRAMEBUFFER ONLINE',
         '[OK] STACK GUARD SEEDED',
         '[OK] AUTHENTICATED SEALED MEMORY ONLINE',
         '[OK] PMM ONLINE',
@@ -93,19 +95,28 @@ function Invoke-SmokeTest([string]$Name, [string[]]$MediaArgs, [string]$Memory =
         '[OK] SMP IPI SELF-TEST PASSED',
         '[OK] PER-CPU GUARDED SYSCALL STACKS ONLINE',
         '[OK] ALL-CPU SYSCALL MSRS VERIFIED',
+        '[OK] PER-CPU SCHEDULER ONLINE',
+        '[OK] CROSS-CPU TASK SELF-TEST PASSED',
+        '[OK] SCHEDULER USER CONTEXT BINDING VERIFIED',
         '[OK] SWAPGS SYSCALL ENTRY ONLINE',
         '[OK] VALIDATED IRETQ USER RETURN VERIFIED',
         '[OK] USER EXCEPTION DELIVERY VERIFIED',
         '[OK] CAPABILITY-BOUND USER THREAD DISPATCH VERIFIED',
-        '[OK] PER-CPU SCHEDULER ONLINE',
-        '[OK] CROSS-CPU TASK SELF-TEST PASSED',
-        '[OK] SCHEDULER USER CONTEXT BINDING VERIFIED',
         '[OK] APIC TIMER ONLINE',
-        '[OK] FRAMEBUFFER ONLINE',
+        '[OK] KERNEL READY',
         'DOXXER_BOOT_OK'
     )
+    $lastIndex = -1
     foreach ($marker in $markers) {
-        if (-not $serial.Contains($marker)) { throw "$Name missing marker '$marker'. See $log" }
+        $index = $serial.IndexOf($marker, $lastIndex + 1, [System.StringComparison]::Ordinal)
+        if ($index -lt 0) { throw "$Name missing or out-of-order marker '$marker'. See $log" }
+        $lastIndex = $index
+    }
+    if ($serial.Contains('[ERROR]') -or $serial.Contains('[PANIC]')) {
+        throw "$Name contains an error or panic. See $log"
+    }
+    if ([regex]::Matches($serial, 'DOXXER_BOOT_OK').Count -ne 1) {
+        throw "$Name did not emit exactly one DOXXER_BOOT_OK marker. See $log"
     }
     if ($exitCode -ne 33) { throw "$Name returned $exitCode, expected 33. See $log" }
     Write-Host "$Name smoke test passed." -ForegroundColor Green

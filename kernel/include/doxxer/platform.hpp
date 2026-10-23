@@ -2,6 +2,7 @@
 
 namespace doxxer::platform {
 bool initialize_restart_hotkey();
+void poll_restart_hotkey();
 void delay_milliseconds(unsigned milliseconds);
 [[noreturn]] void reboot();
 [[noreturn]] void failure_recovery();
