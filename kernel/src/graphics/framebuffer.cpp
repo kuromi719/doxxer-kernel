@@ -411,7 +411,7 @@ void draw_boot_logo() {
     polygon(top, emblem_x, emblem_y, purple);
     polygon(bowl, emblem_x, emblem_y, purple);
     polygon(cap, emblem_x, emblem_y, bright_purple);
-    polygon(facet, emblem_x, emblem_y, deep_purple);
+    polygon(facet, emblem_x, emblem_y, color(163, 47, 234));
 
     auto logo_text_width = [](const char* text) -> u64 {
         u64 width = 0;
@@ -437,7 +437,7 @@ void draw_boot_logo() {
     const u64 right_width = logo_text_width("ER - OS");
     const u64 total = logo_text_width("DO") + gap + xx_width + gap + right_width;
     u64 x = (active->width - total) / 2U;
-    const u64 y = emblem_y + 220U;
+    const u64 y = emblem_y + 237U;
     draw_logo_text("DO", x, y, pale);
     x += logo_text_width("DO") + gap;
     // The two Xs share one cap-height and overlap as a single wordmark.
